@@ -21,35 +21,69 @@ defmodule SwissQrBill.Output.PdfOutput do
   @value_font_size 9
   @line_height_pt 4.0 * 2.8346
 
+  @a4_height 297
+
   @doc """
   Generates the payment part as a PDF binary.
-  The payment part is rendered at the bottom of an A4 page.
+
+  ## Options
+  - `:language` — `:de`, `:fr`, `:it`, `:en`, or `:rm` (default: `:de`)
+  - `:output_size` — `:payment_slip` (default), `:a4`, or `:qr_code`
   """
   @spec render(map(), keyword()) :: {:ok, binary()} | {:error, String.t()}
   def render(bill, opts \\ []) do
     language = Keyword.get(opts, :language, :de)
-    # Offset from bottom-left of A4 page — payment part sits at the bottom
-    offset_y = 0
+    output_size = Keyword.get(opts, :output_size, :payment_slip)
 
     qr_data = QrCodeData.encode(bill)
 
     case QrGen.to_matrix(qr_data) do
       {:ok, matrix} ->
-        pdf_binary =
-          Pdf.build([size: [Pdf.mm(@total_width), Pdf.mm(@total_height)]], fn pdf ->
-            pdf
-            |> draw_separator()
-            |> Pdf.set_font("Helvetica", @value_font_size)
-            |> draw_receipt(bill, language, offset_y)
-            |> draw_payment_part(bill, matrix, language, offset_y)
-            |> Pdf.export()
-          end)
-
+        pdf_binary = render_size(output_size, bill, matrix, language)
         {:ok, pdf_binary}
 
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  defp render_size(:qr_code, _bill, matrix, _language) do
+    # QR code only: 46x46mm + 5mm padding each side = 56x56mm
+    padding = 5
+    qr_size = 46
+    total = qr_size + padding * 2
+
+    Pdf.build([size: [Pdf.mm(total), Pdf.mm(total)]], fn pdf ->
+      pdf
+      |> Pdf.set_font("Helvetica", @value_font_size)
+      |> draw_qr_matrix(matrix, padding * @mm, padding * @mm)
+      |> Pdf.export()
+    end)
+  end
+
+  defp render_size(:a4, bill, matrix, language) do
+    Pdf.build([size: [Pdf.mm(@total_width), Pdf.mm(@a4_height)]], fn pdf ->
+      # Payment slip sits at the bottom of A4
+      # PDF coordinate system: origin at bottom-left
+      # So offset_y = 0 places it at the bottom already
+      pdf
+      |> draw_separator()
+      |> Pdf.set_font("Helvetica", @value_font_size)
+      |> draw_receipt(bill, language, 0)
+      |> draw_payment_part(bill, matrix, language, 0)
+      |> Pdf.export()
+    end)
+  end
+
+  defp render_size(:payment_slip, bill, matrix, language) do
+    Pdf.build([size: [Pdf.mm(@total_width), Pdf.mm(@total_height)]], fn pdf ->
+      pdf
+      |> draw_separator()
+      |> Pdf.set_font("Helvetica", @value_font_size)
+      |> draw_receipt(bill, language, 0)
+      |> draw_payment_part(bill, matrix, language, 0)
+      |> Pdf.export()
+    end)
   end
 
   defp draw_separator(pdf) do
@@ -76,7 +110,7 @@ defmodule SwissQrBill.Output.PdfOutput do
 
   defp draw_receipt_sections(pdf, bill, lang, x, y) do
     # Creditor
-    {pdf, y} = draw_heading_value(pdf, x, y, Translation.get(:creditor, lang), creditor_text(bill), 52)
+    {pdf, y} = draw_heading_value(pdf, x, y, Translation.get(:creditor, lang), creditor_text(bill))
 
     # Reference
     {pdf, y} =
@@ -86,18 +120,18 @@ defmodule SwissQrBill.Output.PdfOutput do
 
         %PaymentReference{} = pr ->
           ref_text = PaymentReference.formatted_reference(pr) || ""
-          draw_heading_value(pdf, x, y, Translation.get(:reference, lang), ref_text, 52)
+          draw_heading_value(pdf, x, y, Translation.get(:reference, lang), ref_text)
       end
 
     # Payable by
     {pdf, _y} =
       case bill.debtor do
         nil ->
-          {pdf, y} = draw_heading_value(pdf, x, y, Translation.get(:payable_by_name, lang), "", 52)
+          {pdf, y} = draw_heading_value(pdf, x, y, Translation.get(:payable_by_name, lang), "")
           {draw_corner_marks(pdf, x, y - 1 * @mm, 52 * @mm, 20 * @mm), y - 22 * @mm}
 
         %Address{} = addr ->
-          draw_heading_value(pdf, x, y, Translation.get(:payable_by, lang), Address.full_address(addr), 52)
+          draw_heading_value(pdf, x, y, Translation.get(:payable_by, lang), Address.full_address(addr))
       end
 
     # Currency and amount
@@ -221,7 +255,7 @@ defmodule SwissQrBill.Output.PdfOutput do
 
   defp draw_payment_text(pdf, bill, lang, text_x, y) do
     # Creditor
-    {pdf, y} = draw_heading_value(pdf, text_x, y, Translation.get(:creditor, lang), creditor_text(bill), 87)
+    {pdf, y} = draw_heading_value(pdf, text_x, y, Translation.get(:creditor, lang), creditor_text(bill))
 
     # Reference
     {pdf, y} =
@@ -231,7 +265,7 @@ defmodule SwissQrBill.Output.PdfOutput do
 
         %PaymentReference{} = pr ->
           ref_text = PaymentReference.formatted_reference(pr) || ""
-          draw_heading_value(pdf, text_x, y, Translation.get(:reference, lang), ref_text, 87)
+          draw_heading_value(pdf, text_x, y, Translation.get(:reference, lang), ref_text)
       end
 
     # Additional information
@@ -246,7 +280,7 @@ defmodule SwissQrBill.Output.PdfOutput do
           if text == "" do
             {pdf, y}
           else
-            draw_heading_value(pdf, text_x, y, Translation.get(:additional_information, lang), text, 87)
+            draw_heading_value(pdf, text_x, y, Translation.get(:additional_information, lang), text)
           end
       end
 
@@ -254,17 +288,17 @@ defmodule SwissQrBill.Output.PdfOutput do
     {pdf, _y} =
       case bill.debtor do
         nil ->
-          {pdf, y} = draw_heading_value(pdf, text_x, y, Translation.get(:payable_by_name, lang), "", 87)
+          {pdf, y} = draw_heading_value(pdf, text_x, y, Translation.get(:payable_by_name, lang), "")
           {draw_corner_marks(pdf, text_x, y - 1 * @mm, 65 * @mm, 25 * @mm), y - 27 * @mm}
 
         %Address{} = addr ->
-          draw_heading_value(pdf, text_x, y, Translation.get(:payable_by, lang), Address.full_address(addr), 87)
+          draw_heading_value(pdf, text_x, y, Translation.get(:payable_by, lang), Address.full_address(addr))
       end
 
     pdf
   end
 
-  defp draw_heading_value(pdf, x, y, heading, value_text, _max_chars) do
+  defp draw_heading_value(pdf, x, y, heading, value_text) do
     pdf = pdf |> Pdf.set_font("Helvetica", @heading_font_size, bold: true)
     pdf = Pdf.text_at(pdf, {x, y}, heading)
 
