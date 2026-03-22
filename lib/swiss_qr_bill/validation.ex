@@ -199,54 +199,40 @@ defmodule SwissQrBill.Validation do
   end
 
   defp validate_address(errors, %Address{} = addr, field) do
-    errors =
-      if is_nil(addr.name) or addr.name == "" do
-        ["#{field} name is required" | errors]
-      else
-        if String.length(addr.name) > 70 do
-          ["#{field} name must be at most 70 characters" | errors]
-        else
-          errors
-        end
-      end
+    errors
+    |> validate_required_field(addr.name, "#{field} name", 70)
+    |> validate_optional_field(addr.street, "#{field} street", 70)
+    |> validate_optional_field(addr.building_number, "#{field} building_number", 16)
+    |> validate_required_field(addr.postal_code, "#{field} postal_code", 16)
+    |> validate_required_field(addr.city, "#{field} city", 35)
+    |> validate_country(addr.country, field)
+  end
 
-    errors =
-      if is_binary(addr.street) and String.length(addr.street) > 70 do
-        ["#{field} street must be at most 70 characters" | errors]
-      else
+  defp validate_required_field(errors, value, label, max_length) do
+    cond do
+      is_nil(value) or value == "" ->
+        ["#{label} is required" | errors]
+
+      String.length(value) > max_length ->
+        ["#{label} must be at most #{max_length} characters" | errors]
+
+      true ->
         errors
-      end
+    end
+  end
 
-    errors =
-      if is_binary(addr.building_number) and String.length(addr.building_number) > 16 do
-        ["#{field} building_number must be at most 16 characters" | errors]
-      else
-        errors
-      end
+  defp validate_optional_field(errors, nil, _label, _max_length), do: errors
 
-    errors =
-      if is_nil(addr.postal_code) or addr.postal_code == "" do
-        ["#{field} postal_code is required" | errors]
-      else
-        if String.length(addr.postal_code) > 16 do
-          ["#{field} postal_code must be at most 16 characters" | errors]
-        else
-          errors
-        end
-      end
+  defp validate_optional_field(errors, value, label, max_length) when is_binary(value) do
+    if String.length(value) > max_length do
+      ["#{label} must be at most #{max_length} characters" | errors]
+    else
+      errors
+    end
+  end
 
-    errors =
-      if is_nil(addr.city) or addr.city == "" do
-        ["#{field} city is required" | errors]
-      else
-        if String.length(addr.city) > 35 do
-          ["#{field} city must be at most 35 characters" | errors]
-        else
-          errors
-        end
-      end
-
-    if is_nil(addr.country) or not Regex.match?(~r/^[A-Z]{2}$/, addr.country) do
+  defp validate_country(errors, country, field) do
+    if is_nil(country) or not Regex.match?(~r/^[A-Z]{2}$/, country) do
       ["#{field} country must be a 2-letter ISO code" | errors]
     else
       errors
@@ -302,15 +288,10 @@ defmodule SwissQrBill.Validation do
 
   defp letters_to_digits(string) do
     string
-    |> String.graphemes()
-    |> Enum.map(fn char ->
-      cond do
-        char >= "0" and char <= "9" ->
-          char
-
-        char >= "A" and char <= "Z" ->
-          Integer.to_string(String.to_charlist(char) |> hd() |> Kernel.-(65) |> Kernel.+(10))
-      end
+    |> String.to_charlist()
+    |> Enum.map(fn
+      c when c >= ?0 and c <= ?9 -> <<c>>
+      c when c >= ?A and c <= ?Z -> Integer.to_string(c - ?A + 10)
     end)
     |> Enum.join()
   end
