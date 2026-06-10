@@ -95,6 +95,13 @@ defmodule SwissQrBill.Output.Translation do
       it: "NON UTILIZZARE PER IL PAGAMENTO",
       en: "DO NOT USE FOR PAYMENT",
       rm: "NUN DUVRAR PER IL PAJAMENT"
+    },
+    branding: %{
+      de: "Erstellt mit qrbill.dev",
+      fr: "Créé avec qrbill.dev",
+      it: "Creato con qrbill.dev",
+      en: "Created by qrbill.dev",
+      rm: "Creà cun qrbill.dev"
     }
   }
 

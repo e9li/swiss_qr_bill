@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.1.2
+
+### Added
+
+- **Branding option** — new `branding: true` option on `to_pdf/2`, `to_svg/2`, and `to_png/2` (default: `false`). Adds a small gray "Created by qrbill.dev" line, localized to the bill's `:language` (de: "Erstellt mit qrbill.dev", fr: "Créé avec qrbill.dev", it: "Creato con qrbill.dev", rm: "Creà cun qrbill.dev"). Placement by `:output_size`:
+  - `:a4` — centered just above the payment slip's top edge (outside the standardized payment part)
+  - `:payment_slip` — small text at the bottom-right edge of the payment part
+  - `:qr_code` — below the QR code; the canvas grows by 4 mm (56 x 60 mm) to fit the line
+- New `:branding` translation key in `SwissQrBill.Output.Translation`
+
+Output without `branding` is unchanged.
+
 ## v0.1.1
 
 ### Added

@@ -19,7 +19,7 @@ Add `swiss_qr_bill` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:swiss_qr_bill, "~> 0.1.1"}
+    {:swiss_qr_bill, "~> 0.1.2"}
   ]
 end
 ```
@@ -125,6 +125,36 @@ The `:language` option supports five languages. Defaults to `:de`.
 ```elixir
 {:ok, pdf} = SwissQrBill.to_pdf(bill, language: :fr)
 ```
+
+### Branding
+
+All three formats accept the `:branding` option. When `true`, a small gray
+"Created by qrbill.dev" line is added, localized to the bill's `:language`.
+Defaults to `false`, and output without it is unchanged.
+
+```elixir
+{:ok, pdf} = SwissQrBill.to_pdf(bill, branding: true)
+{:ok, svg} = SwissQrBill.to_svg(bill, branding: true)
+{:ok, png} = SwissQrBill.to_png(bill, branding: true, dpi: 300)
+```
+
+The localized text is:
+
+| Code | Text |
+|------|------|
+| `:de` | Erstellt mit qrbill.dev |
+| `:fr` | Créé avec qrbill.dev |
+| `:it` | Creato con qrbill.dev |
+| `:en` | Created by qrbill.dev |
+| `:rm` | Creà cun qrbill.dev |
+
+Placement depends on the `:output_size`:
+
+| Output size | Placement |
+|-------------|-----------|
+| `:a4` | Centered just above the payment slip's top edge (outside the standardized payment part) |
+| `:payment_slip` | Small text at the bottom-right edge of the payment part |
+| `:qr_code` | Below the QR code; the canvas grows by 4 mm (56 x 60 mm) to fit the line |
 
 ## Reference generators
 

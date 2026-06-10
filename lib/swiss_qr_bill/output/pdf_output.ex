@@ -19,9 +19,13 @@ defmodule SwissQrBill.Output.PdfOutput do
   @title_font_size 11
   @heading_font_size 8
   @value_font_size 9
+  @branding_font_size 6
   @line_height_pt 4.0 * 2.8346
 
   @a4_height 297
+
+  # Extra canvas below the QR code for the branding line (qr_code output only)
+  @qr_branding_space 4
 
   @doc """
   Generates the payment part as a PDF binary.
@@ -29,17 +33,23 @@ defmodule SwissQrBill.Output.PdfOutput do
   ## Options
   - `:language` — `:de`, `:fr`, `:it`, `:en`, or `:rm` (default: `:de`)
   - `:output_size` — `:payment_slip` (default), `:a4`, or `:qr_code`
+  - `:branding` — when `true`, adds a small localized "Created by qrbill.dev"
+    line (default: `false`). Placement depends on `:output_size`: above the
+    payment slip (`:a4`), at the bottom edge of the payment part
+    (`:payment_slip`), or below the code on a slightly taller canvas
+    (`:qr_code`).
   """
   @spec render(map(), keyword()) :: {:ok, binary()} | {:error, String.t()}
   def render(bill, opts \\ []) do
     language = Keyword.get(opts, :language, :de)
     output_size = Keyword.get(opts, :output_size, :payment_slip)
+    branding = Keyword.get(opts, :branding, false)
 
     qr_data = QrCodeData.encode(bill)
 
     case QrGen.to_matrix(qr_data) do
       {:ok, matrix} ->
-        pdf_binary = render_size(output_size, bill, matrix, language)
+        pdf_binary = render_size(output_size, bill, matrix, language, branding)
         {:ok, pdf_binary}
 
       {:error, reason} ->
@@ -47,21 +57,23 @@ defmodule SwissQrBill.Output.PdfOutput do
     end
   end
 
-  defp render_size(:qr_code, _bill, matrix, _language) do
+  defp render_size(:qr_code, _bill, matrix, language, branding) do
     # QR code only: 46x46mm + 5mm padding each side = 56x56mm
     padding = 5
     qr_size = 46
     total = qr_size + padding * 2
+    branding_space = if branding, do: @qr_branding_space, else: 0
 
-    Pdf.build([size: [Pdf.mm(total), Pdf.mm(total)]], fn pdf ->
+    Pdf.build([size: [Pdf.mm(total), Pdf.mm(total + branding_space)]], fn pdf ->
       pdf
       |> Pdf.set_font("Helvetica", @value_font_size)
-      |> draw_qr_matrix(matrix, padding * @mm, padding * @mm)
+      |> draw_qr_matrix(matrix, padding * @mm, (padding + branding_space) * @mm)
+      |> draw_branding(branding, language, :qr_code)
       |> Pdf.export()
     end)
   end
 
-  defp render_size(:a4, bill, matrix, language) do
+  defp render_size(:a4, bill, matrix, language, branding) do
     Pdf.build([size: [Pdf.mm(@total_width), Pdf.mm(@a4_height)]], fn pdf ->
       # Payment slip sits at the bottom of A4
       # PDF coordinate system: origin at bottom-left
@@ -71,19 +83,70 @@ defmodule SwissQrBill.Output.PdfOutput do
       |> Pdf.set_font("Helvetica", @value_font_size)
       |> draw_receipt(bill, language, 0)
       |> draw_payment_part(bill, matrix, language, 0)
+      |> draw_branding(branding, language, :a4)
       |> Pdf.export()
     end)
   end
 
-  defp render_size(:payment_slip, bill, matrix, language) do
+  defp render_size(:payment_slip, bill, matrix, language, branding) do
     Pdf.build([size: [Pdf.mm(@total_width), Pdf.mm(@total_height)]], fn pdf ->
       pdf
       |> draw_separator()
       |> Pdf.set_font("Helvetica", @value_font_size)
       |> draw_receipt(bill, language, 0)
       |> draw_payment_part(bill, matrix, language, 0)
+      |> draw_branding(branding, language, :payment_slip)
       |> Pdf.export()
     end)
+  end
+
+  defp draw_branding(pdf, false, _lang, _placement), do: pdf
+
+  defp draw_branding(pdf, true, lang, placement) do
+    text = Translation.get(:branding, lang)
+
+    pdf
+    |> Pdf.set_font("Helvetica", @branding_font_size)
+    |> Pdf.set_fill_color(:gray)
+    |> draw_branding_text(text, placement)
+    |> Pdf.set_fill_color(:black)
+    |> Pdf.set_font("Helvetica", @value_font_size)
+  end
+
+  # Centered just above the payment slip's top edge — outside the standardized
+  # payment part, so the slip itself stays untouched.
+  defp draw_branding_text(pdf, text, :a4) do
+    Pdf.text_wrap!(
+      pdf,
+      {0, (@total_height + 4) * @mm},
+      {@total_width * @mm, 4 * @mm},
+      text,
+      align: :center
+    )
+  end
+
+  # Bottom-right edge of the payment part, below the content sections.
+  defp draw_branding_text(pdf, text, :payment_slip) do
+    x = (@receipt_width + 5) * @mm
+
+    Pdf.text_wrap!(
+      pdf,
+      {x, 3.5 * @mm},
+      {(@total_width - 5) * @mm - x, 3.5 * @mm},
+      text,
+      align: :right
+    )
+  end
+
+  # Centered in the extra canvas strip below the QR code.
+  defp draw_branding_text(pdf, text, :qr_code) do
+    Pdf.text_wrap!(
+      pdf,
+      {0, (@qr_branding_space + 0.5) * @mm},
+      {56 * @mm, 4 * @mm},
+      text,
+      align: :center
+    )
   end
 
   defp draw_separator(pdf) do

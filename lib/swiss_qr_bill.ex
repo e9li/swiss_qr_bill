@@ -155,6 +155,7 @@ defmodule SwissQrBill do
   ## Options
   - `:language` — `:de`, `:fr`, `:it`, `:en`, or `:rm` (default: `:de`)
   - `:output_size` — `:payment_slip` (210x105mm), `:a4` (210x297mm), or `:qr_code` (56x56mm). Default: `:payment_slip`
+  - `:branding` — when `true`, adds a small localized "Created by qrbill.dev" line (default: `false`). With `:qr_code` the canvas grows by 4mm to fit the line below the code.
   """
   @spec to_pdf(t(), keyword()) :: {:ok, binary()} | {:error, any()}
   def to_pdf(%__MODULE__{} = bill, opts \\ []) do
@@ -171,6 +172,7 @@ defmodule SwissQrBill do
   ## Options
   - `:language` — `:de`, `:fr`, `:it`, `:en`, or `:rm` (default: `:de`)
   - `:output_size` — `:payment_slip` (210x105mm), `:a4` (210x297mm), or `:qr_code` (56x56mm). Default: `:payment_slip`
+  - `:branding` — when `true`, adds a small localized "Created by qrbill.dev" line (default: `false`)
   """
   @spec to_svg(t(), keyword()) :: {:ok, binary()} | {:error, any()}
   def to_svg(%__MODULE__{} = bill, opts \\ []) do
@@ -188,6 +190,7 @@ defmodule SwissQrBill do
   - `:language` — `:de`, `:fr`, `:it`, `:en`, or `:rm` (default: `:de`)
   - `:output_size` — `:payment_slip` (210x105mm), `:a4` (210x297mm), or `:qr_code` (56x56mm). Default: `:payment_slip`
   - `:dpi` — resolution (default: 300)
+  - `:branding` — when `true`, adds a small localized "Created by qrbill.dev" line (default: `false`)
   """
   @spec to_png(t(), keyword()) :: {:ok, binary()} | {:error, any()}
   def to_png(%__MODULE__{} = bill, opts \\ []) do
