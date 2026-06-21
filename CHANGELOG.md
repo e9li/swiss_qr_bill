@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.1.3
+
+### Changed
+
+- Verified compatibility with **Elixir 1.20 / OTP 29** — the library compiles cleanly with no errors or warnings (`mix compile --warnings-as-errors --all-warnings`).
+- Removed a redundant `is_binary/1` guard in the translation test that Elixir 1.20's type checker flagged as always-true.
+
+No public API or behavior changes — this release is fully backward compatible.
+
 ## v0.1.2
 
 ### Added

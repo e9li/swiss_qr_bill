@@ -25,7 +25,8 @@ defmodule SwissQrBill.Output.TranslationTest do
     test "returns non-empty string for all key/language combinations" do
       for key <- @keys, lang <- @languages do
         result = Translation.get(key, lang)
-        assert is_binary(result) and result != "",
+
+        assert result != "",
                "Missing translation for #{key}/#{lang}"
       end
     end

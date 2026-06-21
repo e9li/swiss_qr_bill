@@ -19,7 +19,7 @@ Add `swiss_qr_bill` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:swiss_qr_bill, "~> 0.1.2"}
+    {:swiss_qr_bill, "~> 0.1.3"}
   ]
 end
 ```
