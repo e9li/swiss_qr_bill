@@ -19,7 +19,7 @@ Add `swiss_qr_bill` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:swiss_qr_bill, "~> 0.1.3"}
+    {:swiss_qr_bill, "~> 0.1.4"}
   ]
 end
 ```
@@ -246,6 +246,18 @@ The payment slip renders the complete payment part (210 x 105 mm):
 - **Payment part** (right, 148 mm) — QR code with Swiss cross, creditor, reference, additional information, amount, debtor
 
 The layout follows the [SIX style guide](https://www.six-group.com/dam/download/banking-services/standardization/qr-bill/style-guide-qr-bill-en.pdf) specifications.
+
+Font sizes follow the style guide per section: the receipt uses 6 pt headings and
+8 pt values, and the payment part uses 8 pt headings and 10 pt values (the title is
+11 pt). Sample outputs for all three sizes and formats are in [`samples/`](samples).
+
+### Long values
+
+Long values wrap automatically to the width of their column. A long creditor or
+debtor name or street (within the 70-character limit) breaks onto multiple lines
+rather than overrunning into the QR code or off the page edge, as permitted by the
+SIX Implementation Guidelines. Very long unbreakable words are broken mid-word only
+where a line would otherwise overflow.
 
 ## Validation constraints
 

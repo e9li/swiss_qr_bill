@@ -3,9 +3,28 @@ defmodule SwissQrBill.Output.PdfOutput do
   Generates the complete Swiss QR bill payment part as PDF.
   Uses the `pdf` library. Layout matches the SIX style guide.
   The QR code is drawn directly as filled rectangles from the QR matrix.
+
+  Long values (e.g. a long creditor name or street) are wrapped to the width of
+  their column via `Pdf.text_wrap/5`, so they never overrun into the QR code
+  (receipt) or off the page edge (payment part). Each information section is
+  laid out against the page cursor: `text_wrap` advances the cursor to the
+  bottom of the wrapped block, and the next field starts from there. Very long
+  unbreakable tokens are soft-broken so they wrap mid-word instead of
+  overrunning.
+
+  Font sizes follow the SIX style guide per section (§3.4): the receipt uses
+  6 pt headings / 8 pt values, the payment part 8 pt headings / 10 pt values,
+  and the title 11 pt.
   """
 
-  alias SwissQrBill.{Address, CreditorInformation, PaymentAmount, PaymentReference, AdditionalInformation}
+  alias SwissQrBill.{
+    Address,
+    CreditorInformation,
+    PaymentAmount,
+    PaymentReference,
+    AdditionalInformation
+  }
+
   alias SwissQrBill.QrCode.QrCode, as: QrGen
   alias SwissQrBill.QrCodeData
   alias SwissQrBill.Output.Translation
@@ -16,11 +35,33 @@ defmodule SwissQrBill.Output.PdfOutput do
   @total_width 210
   @total_height 105
 
+  # Font sizes per SIX IG QR-bill §3.4. Payment part: headings/values 6–10pt
+  # (recommended 8/10). Receipt: 6pt headings, 8pt values. Title: 11pt.
   @title_font_size 11
-  @heading_font_size 8
-  @value_font_size 9
+  @payment_heading_size 8
+  @payment_value_size 10
+  @receipt_heading_size 6
+  @receipt_value_size 8
   @branding_font_size 6
   @line_height_pt 4.0 * 2.8346
+
+  # Line spacing for the wrapped information sections. The receipt is tighter so
+  # it fits its small vertical budget at 8pt; the payment part has more room.
+  @receipt_line_height 3.2 * 2.8346
+  @payment_line_height 4.0 * 2.8346
+
+  # Usable text width of each information column (points).
+  # Receipt: x=5mm to ~5mm before the 62mm perforation. Payment part: from the
+  # text start to the 5mm right margin.
+  @receipt_text_width 52 * 2.8346
+
+  # text_wrap only breaks on whitespace/hyphens, so a very long unbreakable
+  # token (e.g. a German compound name) would overrun. We insert zero-width
+  # spaces (a WinAnsi-encodable, invisible break opportunity the wrapper honours)
+  # into tokens longer than this, so they can wrap mid-word when a column is
+  # too narrow — and stay intact when it is not.
+  @zero_width_space <<0x200B::utf8>>
+  @max_token_length 22
 
   @a4_height 297
 
@@ -66,7 +107,7 @@ defmodule SwissQrBill.Output.PdfOutput do
 
     Pdf.build([size: [Pdf.mm(total), Pdf.mm(total + branding_space)]], fn pdf ->
       pdf
-      |> Pdf.set_font("Helvetica", @value_font_size)
+      |> Pdf.set_font("Helvetica", @payment_value_size)
       |> draw_qr_matrix(matrix, padding * @mm, (padding + branding_space) * @mm)
       |> draw_branding(branding, language, :qr_code)
       |> Pdf.export()
@@ -80,7 +121,7 @@ defmodule SwissQrBill.Output.PdfOutput do
       # So offset_y = 0 places it at the bottom already
       pdf
       |> draw_separator()
-      |> Pdf.set_font("Helvetica", @value_font_size)
+      |> Pdf.set_font("Helvetica", @payment_value_size)
       |> draw_receipt(bill, language, 0)
       |> draw_payment_part(bill, matrix, language, 0)
       |> draw_branding(branding, language, :a4)
@@ -92,7 +133,7 @@ defmodule SwissQrBill.Output.PdfOutput do
     Pdf.build([size: [Pdf.mm(@total_width), Pdf.mm(@total_height)]], fn pdf ->
       pdf
       |> draw_separator()
-      |> Pdf.set_font("Helvetica", @value_font_size)
+      |> Pdf.set_font("Helvetica", @payment_value_size)
       |> draw_receipt(bill, language, 0)
       |> draw_payment_part(bill, matrix, language, 0)
       |> draw_branding(branding, language, :payment_slip)
@@ -110,7 +151,7 @@ defmodule SwissQrBill.Output.PdfOutput do
     |> Pdf.set_fill_color(:gray)
     |> draw_branding_text(text, placement)
     |> Pdf.set_fill_color(:black)
-    |> Pdf.set_font("Helvetica", @value_font_size)
+    |> Pdf.set_font("Helvetica", @payment_value_size)
   end
 
   # Centered just above the payment slip's top edge — outside the standardized
@@ -167,62 +208,82 @@ defmodule SwissQrBill.Output.PdfOutput do
     # Title
     |> Pdf.set_font("Helvetica", @title_font_size, bold: true)
     |> Pdf.text_at({x, y}, Translation.get(:receipt, lang))
-    # Creditor
-    |> then(&draw_receipt_sections(&1, bill, lang, x, y - 12 * @mm))
+    # Information section flows from the cursor downward
+    |> Pdf.set_cursor(y - 12 * @mm)
+    |> draw_receipt_sections(bill, lang, x)
   end
 
-  defp draw_receipt_sections(pdf, bill, lang, x, y) do
+  defp draw_receipt_sections(pdf, bill, lang, x) do
+    max_w = @receipt_text_width
+    h = @receipt_heading_size
+    v = @receipt_value_size
+    lh = @receipt_line_height
+
     # Creditor
-    {pdf, y} = draw_heading_value(pdf, x, y, Translation.get(:creditor, lang), creditor_text(bill))
+    pdf =
+      draw_field(pdf, x, max_w, Translation.get(:creditor, lang), creditor_text(bill), h, v, lh)
 
     # Reference
-    {pdf, y} =
+    pdf =
       case bill.payment_reference do
         %PaymentReference{type: :non} ->
-          {pdf, y}
+          pdf
 
         %PaymentReference{} = pr ->
           ref_text = PaymentReference.formatted_reference(pr) || ""
-          draw_heading_value(pdf, x, y, Translation.get(:reference, lang), ref_text)
+          draw_field(pdf, x, max_w, Translation.get(:reference, lang), ref_text, h, v, lh)
       end
 
     # Payable by
-    {pdf, _y} =
+    pdf =
       case bill.debtor do
         nil ->
-          {pdf, y} = draw_heading_value(pdf, x, y, Translation.get(:payable_by_name, lang), "")
-          {draw_corner_marks(pdf, x, y - 1 * @mm, 52 * @mm, 20 * @mm), y - 22 * @mm}
+          pdf = draw_label(pdf, x, max_w, Translation.get(:payable_by_name, lang), h, lh)
+          top = Pdf.cursor(pdf)
+          draw_corner_marks(pdf, x, top - 20 * @mm, 52 * @mm, 20 * @mm)
 
         %Address{} = addr ->
-          draw_heading_value(pdf, x, y, Translation.get(:payable_by, lang), Address.full_address(addr))
+          draw_field(
+            pdf,
+            x,
+            max_w,
+            Translation.get(:payable_by, lang),
+            Address.full_address(addr),
+            h,
+            v,
+            lh
+          )
       end
 
-    # Currency and amount
+    # Currency and amount (fixed position)
     currency_y = 23 * @mm
-    pdf = pdf |> Pdf.set_font("Helvetica", @heading_font_size, bold: true)
-    pdf = Pdf.text_at(pdf, {x, currency_y + @line_height_pt}, Translation.get(:currency, lang))
-    pdf = pdf |> Pdf.set_font("Helvetica", @value_font_size)
-    pdf = Pdf.text_at(pdf, {x, currency_y}, bill.payment_amount.currency)
+
+    pdf =
+      pdf
+      |> Pdf.set_font("Helvetica", h, bold: true)
+      |> Pdf.text_at({x, currency_y + @line_height_pt}, Translation.get(:currency, lang))
+      |> Pdf.set_font("Helvetica", v)
+      |> Pdf.text_at({x, currency_y}, bill.payment_amount.currency)
 
     amount_x = x + 18 * @mm
-    pdf = pdf |> Pdf.set_font("Helvetica", @heading_font_size, bold: true)
-    pdf = Pdf.text_at(pdf, {amount_x, currency_y + @line_height_pt}, Translation.get(:amount, lang))
-    pdf = pdf |> Pdf.set_font("Helvetica", @value_font_size)
+
+    pdf =
+      pdf
+      |> Pdf.set_font("Helvetica", h, bold: true)
+      |> Pdf.text_at({amount_x, currency_y + @line_height_pt}, Translation.get(:amount, lang))
+      |> Pdf.set_font("Helvetica", v)
 
     pdf =
       case PaymentAmount.formatted_amount(bill.payment_amount) do
-        "" ->
-          draw_corner_marks(pdf, amount_x, currency_y - 2 * @mm, 30 * @mm, 10 * @mm)
-
-        formatted ->
-          Pdf.text_at(pdf, {amount_x, currency_y}, formatted)
+        "" -> draw_corner_marks(pdf, amount_x, currency_y - 2 * @mm, 30 * @mm, 10 * @mm)
+        formatted -> Pdf.text_at(pdf, {amount_x, currency_y}, formatted)
       end
 
     # Acceptance point
     ap_y = 10 * @mm
 
     pdf
-    |> Pdf.set_font("Helvetica", @heading_font_size, bold: true)
+    |> Pdf.set_font("Helvetica", h, bold: true)
     |> Pdf.text_at({x + 20 * @mm, ap_y}, Translation.get(:acceptance_point, lang))
   end
 
@@ -239,8 +300,9 @@ defmodule SwissQrBill.Output.PdfOutput do
     |> draw_qr_matrix(matrix, x, y - 12 * @mm - 46 * @mm)
     # Currency and amount — same height as receipt (23mm from bottom)
     |> draw_payment_amount(bill, lang, x, 23 * @mm)
-    # Right side text
-    |> draw_payment_text(bill, lang, (@receipt_width + 56) * @mm, y - 10 * @mm)
+    # Right side text (information section), flowing from the cursor downward
+    |> Pdf.set_cursor(y - 10 * @mm)
+    |> draw_payment_text(bill, lang, (@receipt_width + 56) * @mm)
   end
 
   defp draw_qr_matrix(pdf, matrix, x, y) do
@@ -284,7 +346,10 @@ defmodule SwissQrBill.Output.PdfOutput do
     pdf
     # White background with border
     |> Pdf.set_fill_color(:white)
-    |> Pdf.rectangle({cx - border, cy - border}, {cross_size + 2 * border, cross_size + 2 * border})
+    |> Pdf.rectangle(
+      {cx - border, cy - border},
+      {cross_size + 2 * border, cross_size + 2 * border}
+    )
     |> Pdf.fill()
     # Black square
     |> Pdf.set_fill_color(:black)
@@ -292,22 +357,28 @@ defmodule SwissQrBill.Output.PdfOutput do
     |> Pdf.fill()
     # White cross (vertical bar) — Swiss cross grid: 6/32 arm width, 20/32 arm length
     |> Pdf.set_fill_color(:white)
-    |> Pdf.rectangle({cx + cross_size * 13/32, cy + cross_size * 6/32}, {cross_size * 6/32, cross_size * 20/32})
+    |> Pdf.rectangle(
+      {cx + cross_size * 13 / 32, cy + cross_size * 6 / 32},
+      {cross_size * 6 / 32, cross_size * 20 / 32}
+    )
     |> Pdf.fill()
     # White cross (horizontal bar)
-    |> Pdf.rectangle({cx + cross_size * 6/32, cy + cross_size * 13/32}, {cross_size * 20/32, cross_size * 6/32})
+    |> Pdf.rectangle(
+      {cx + cross_size * 6 / 32, cy + cross_size * 13 / 32},
+      {cross_size * 20 / 32, cross_size * 6 / 32}
+    )
     |> Pdf.fill()
   end
 
   defp draw_payment_amount(pdf, bill, lang, x, y) do
     pdf
-    |> Pdf.set_font("Helvetica", @heading_font_size, bold: true)
+    |> Pdf.set_font("Helvetica", @payment_heading_size, bold: true)
     |> Pdf.text_at({x, y + @line_height_pt}, Translation.get(:currency, lang))
-    |> Pdf.set_font("Helvetica", @value_font_size)
+    |> Pdf.set_font("Helvetica", @payment_value_size)
     |> Pdf.text_at({x, y}, bill.payment_amount.currency)
-    |> Pdf.set_font("Helvetica", @heading_font_size, bold: true)
+    |> Pdf.set_font("Helvetica", @payment_heading_size, bold: true)
     |> Pdf.text_at({x + 18 * @mm, y + @line_height_pt}, Translation.get(:amount, lang))
-    |> Pdf.set_font("Helvetica", @value_font_size)
+    |> Pdf.set_font("Helvetica", @payment_value_size)
     |> then(fn pdf ->
       case PaymentAmount.formatted_amount(bill.payment_amount) do
         "" -> draw_corner_marks(pdf, x + 18 * @mm, y - 3 * @mm, 30 * @mm, 10 * @mm)
@@ -316,68 +387,138 @@ defmodule SwissQrBill.Output.PdfOutput do
     end)
   end
 
-  defp draw_payment_text(pdf, bill, lang, text_x, y) do
+  defp draw_payment_text(pdf, bill, lang, text_x) do
+    max_w = (@total_width - 5) * @mm - text_x
+    h = @payment_heading_size
+    v = @payment_value_size
+    lh = @payment_line_height
+
     # Creditor
-    {pdf, y} = draw_heading_value(pdf, text_x, y, Translation.get(:creditor, lang), creditor_text(bill))
+    pdf =
+      draw_field(
+        pdf,
+        text_x,
+        max_w,
+        Translation.get(:creditor, lang),
+        creditor_text(bill),
+        h,
+        v,
+        lh
+      )
 
     # Reference
-    {pdf, y} =
+    pdf =
       case bill.payment_reference do
         %PaymentReference{type: :non} ->
-          {pdf, y}
+          pdf
 
         %PaymentReference{} = pr ->
           ref_text = PaymentReference.formatted_reference(pr) || ""
-          draw_heading_value(pdf, text_x, y, Translation.get(:reference, lang), ref_text)
+          draw_field(pdf, text_x, max_w, Translation.get(:reference, lang), ref_text, h, v, lh)
       end
 
     # Additional information
-    {pdf, y} =
+    pdf =
       case bill.additional_information do
         nil ->
-          {pdf, y}
+          pdf
 
         %AdditionalInformation{} = ai ->
-          text = AdditionalInformation.formatted_string(ai)
+          case AdditionalInformation.formatted_string(ai) do
+            "" ->
+              pdf
 
-          if text == "" do
-            {pdf, y}
-          else
-            draw_heading_value(pdf, text_x, y, Translation.get(:additional_information, lang), text)
+            text ->
+              draw_field(
+                pdf,
+                text_x,
+                max_w,
+                Translation.get(:additional_information, lang),
+                text,
+                h,
+                v,
+                lh
+              )
           end
       end
 
     # Payable by
-    {pdf, _y} =
-      case bill.debtor do
-        nil ->
-          {pdf, y} = draw_heading_value(pdf, text_x, y, Translation.get(:payable_by_name, lang), "")
-          {draw_corner_marks(pdf, text_x, y - 1 * @mm, 65 * @mm, 25 * @mm), y - 27 * @mm}
+    case bill.debtor do
+      nil ->
+        pdf = draw_label(pdf, text_x, max_w, Translation.get(:payable_by_name, lang), h, lh)
+        top = Pdf.cursor(pdf)
+        draw_corner_marks(pdf, text_x, top - 25 * @mm, 65 * @mm, 25 * @mm)
 
-        %Address{} = addr ->
-          draw_heading_value(pdf, text_x, y, Translation.get(:payable_by, lang), Address.full_address(addr))
-      end
+      %Address{} = addr ->
+        draw_field(
+          pdf,
+          text_x,
+          max_w,
+          Translation.get(:payable_by, lang),
+          Address.full_address(addr),
+          h,
+          v,
+          lh
+        )
+    end
+  end
+
+  # Draws a bold heading followed by its (wrapped) value, starting at the page
+  # cursor, then leaves a 2mm gap before the next field. The cursor ends just
+  # below the field.
+  defp draw_field(pdf, x, max_w, heading, value, heading_size, value_size, leading) do
+    pdf
+    |> draw_label(x, max_w, heading, heading_size, leading)
+    |> Pdf.set_font("Helvetica", value_size)
+    |> wrap_at_cursor(x, max_w, value, leading)
+    |> Pdf.move_down(2 * @mm)
+  end
+
+  # Draws a bold heading at the cursor.
+  defp draw_label(pdf, x, max_w, label, size, leading) do
+    pdf
+    |> Pdf.set_font("Helvetica", size, bold: true)
+    |> wrap_at_cursor(x, max_w, label, leading)
+  end
+
+  # Wraps `text` to `max_w` at the current cursor using the current font, and
+  # advances the cursor to the bottom of the rendered block. Wrapping is
+  # measured against the font actually embedded in the PDF, so break points are
+  # deterministic; `leading` pins line spacing regardless of font.
+  defp wrap_at_cursor(pdf, _x, _max_w, "", _leading), do: pdf
+
+  defp wrap_at_cursor(pdf, x, max_w, text, leading) do
+    top = Pdf.cursor(pdf)
+    # height = distance to the page bottom: generous, so all lines render.
+    {pdf, _result} =
+      Pdf.text_wrap(pdf, {x, top}, {max_w, top}, soft_break(text),
+        leading: leading,
+        align: :left
+      )
 
     pdf
   end
 
-  defp draw_heading_value(pdf, x, y, heading, value_text) do
-    pdf = pdf |> Pdf.set_font("Helvetica", @heading_font_size, bold: true)
-    pdf = Pdf.text_at(pdf, {x, y}, heading)
+  # Inserts zero-width spaces into over-long tokens so the wrapper can break
+  # them mid-word when a column is too narrow. The ZWSP is invisible and is only
+  # consumed as a break point when a line would otherwise overflow, so tokens
+  # that fit are left untouched. Public for testing.
+  @doc false
+  def soft_break(text) do
+    text
+    |> String.split(" ")
+    |> Enum.map_join(" ", &break_token/1)
+  end
 
-    pdf = pdf |> Pdf.set_font("Helvetica", @value_font_size)
-    lines = String.split(value_text, "\n")
-
-    {pdf, new_y} =
-      Enum.reduce(lines, {pdf, y - @line_height_pt}, fn line, {pdf_acc, ly} ->
-        if line == "" do
-          {pdf_acc, ly}
-        else
-          {Pdf.text_at(pdf_acc, {x, ly}, line), ly - @line_height_pt}
-        end
-      end)
-
-    {pdf, new_y - 2 * @mm}
+  defp break_token(token) do
+    if String.length(token) > @max_token_length do
+      token
+      |> String.graphemes()
+      |> Enum.chunk_every(@max_token_length)
+      |> Enum.map_join(@zero_width_space, &Enum.join/1)
+    else
+      token
+    end
   end
 
   defp draw_corner_marks(pdf, x, y, width, height) do

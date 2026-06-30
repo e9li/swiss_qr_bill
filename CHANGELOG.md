@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.1.4
+
+### Fixed
+
+- **Long names and addresses no longer collide with the QR code or run off the page edge.** Values in the information sections (creditor, debtor, reference, additional information) are now wrapped to the width of their column instead of being drawn on a single unbounded line. A long creditor or debtor name or street — long but within the 70-character limit — now wraps onto multiple lines, as the SIX Implementation Guidelines permit (§3.5.4 / §3.6.2). Very long unbreakable tokens (e.g. German compound names) are soft-broken so they wrap mid-word rather than overrunning. Reported by [@jueberschlag](https://github.com/jueberschlag) in [#1](https://github.com/e9li/swiss_qr_bill/issues/1).
+
+### Changed
+
+- **Font sizes now follow the SIX style guide per section** (§3.4): the receipt uses 6 pt headings / 8 pt values (was 8 pt / 9 pt), and the payment part uses 8 pt headings / 10 pt values (was 8 pt / 9 pt). The receipt uses tighter line spacing to fit its smaller area. The rendered appearance of the receipt and payment part therefore changes; the encoded QR data is unchanged.
+- Regenerated the `samples/` files with the updated layout.
+
+The public API and options are unchanged — only the rendered layout differs.
+
 ## v0.1.3
 
 ### Changed
