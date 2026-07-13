@@ -20,12 +20,27 @@ defmodule SwissQrBill.PaymentAmountTest do
     test "creates with currency and amount" do
       pa = PaymentAmount.new("CHF", 2500.25)
       assert pa.currency == "CHF"
-      assert pa.amount == 2500.25
+      assert Decimal.equal?(pa.amount, Decimal.new("2500.25"))
     end
 
     test "creates with nil amount" do
       pa = PaymentAmount.new("EUR", nil)
       assert pa.amount == nil
+    end
+
+    test "accepts a decimal string" do
+      pa = PaymentAmount.new("CHF", "2500.25")
+      assert Decimal.equal?(pa.amount, Decimal.new("2500.25"))
+    end
+
+    test "accepts a Decimal" do
+      pa = PaymentAmount.new("CHF", Decimal.new("99.90"))
+      assert Decimal.equal?(pa.amount, Decimal.new("99.9"))
+    end
+
+    test "accepts an integer" do
+      pa = PaymentAmount.new("CHF", 100)
+      assert Decimal.equal?(pa.amount, Decimal.new("100"))
     end
   end
 
@@ -62,6 +77,11 @@ defmodule SwissQrBill.PaymentAmountTest do
     test "returns nil amount and currency when no amount" do
       pa = PaymentAmount.new("CHF")
       assert PaymentAmount.qr_code_data(pa) == [nil, "CHF"]
+    end
+
+    test "formats integer and string amounts to two decimals" do
+      assert ["100.00", "CHF"] = PaymentAmount.qr_code_data(PaymentAmount.new("CHF", 100))
+      assert ["42.50", "CHF"] = PaymentAmount.qr_code_data(PaymentAmount.new("CHF", "42.5"))
     end
   end
 end

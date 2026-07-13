@@ -33,3 +33,5 @@ erl_crash.dump
 swiss_qr_bill-*.tar
 
 mix.lock
+
+/tasks/

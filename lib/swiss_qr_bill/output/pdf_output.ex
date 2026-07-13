@@ -43,7 +43,8 @@ defmodule SwissQrBill.Output.PdfOutput do
   @receipt_heading_size 6
   @receipt_value_size 8
   @branding_font_size 6
-  @line_height_pt 4.0 * 2.8346
+  # Vertical gap between a value baseline and its heading baseline (4 mm).
+  @heading_gap 4.0 * 2.8346
 
   # Line spacing for the wrapped information sections. The receipt is tighter so
   # it fits its small vertical budget at 8pt; the payment part has more room.
@@ -56,30 +57,50 @@ defmodule SwissQrBill.Output.PdfOutput do
   @receipt_text_width 52 * 2.8346
 
   # text_wrap only breaks on whitespace/hyphens, so a very long unbreakable
-  # token (e.g. a German compound name) would overrun. We insert zero-width
-  # spaces (a WinAnsi-encodable, invisible break opportunity the wrapper honours)
-  # into tokens longer than this, so they can wrap mid-word when a column is
-  # too narrow — and stay intact when it is not.
-  @zero_width_space <<0x200B::utf8>>
+  # token (e.g. a German compound name) would overrun. We insert soft hyphens
+  # (U+00AD) into tokens longer than this, so they can wrap mid-word when a
+  # column is too narrow — and stay intact when it is not. The wrapper drops
+  # unused soft hyphens and renders a hyphen at the break point. (A zero-width
+  # space would seem more natural, but the pdf library byte-truncates U+200B
+  # to 0x0B — an undefined glyph — whereas U+00AD is proper WinAnsi 0xAD.)
+  @soft_hyphen <<0xAD::utf8>>
   @max_token_length 22
+
+  # The pdf library renders text as WinAnsi (CP1252) and raises on anything
+  # outside it, but the Swiss QR character set (§4.1.1) rightly includes all of
+  # Latin Extended-A plus Ș ș Ț ț. For the *printed* text we transliterate the
+  # codepoints WinAnsi cannot represent — NFD-decompose and strip combining
+  # marks (Ș → S, ā → a) — while the QR payload keeps the original characters.
+  # These letters have no decomposition and need an explicit mapping:
+  @transliterations %{
+    "Đ" => "D",
+    "đ" => "d",
+    "Ħ" => "H",
+    "ħ" => "h",
+    "ı" => "i",
+    "Ĳ" => "IJ",
+    "ĳ" => "ij",
+    "ĸ" => "k",
+    "Ŀ" => "L",
+    "ŀ" => "l",
+    "Ł" => "L",
+    "ł" => "l",
+    "ŉ" => "'n",
+    "Ŋ" => "N",
+    "ŋ" => "n",
+    "Ŧ" => "T",
+    "ŧ" => "t",
+    "ſ" => "s"
+  }
 
   @a4_height 297
 
   # Extra canvas below the QR code for the branding line (qr_code output only)
   @qr_branding_space 4
 
-  @doc """
-  Generates the payment part as a PDF binary.
-
-  ## Options
-  - `:language` — `:de`, `:fr`, `:it`, `:en`, or `:rm` (default: `:de`)
-  - `:output_size` — `:payment_slip` (default), `:a4`, or `:qr_code`
-  - `:branding` — when `true`, adds a small localized "Created by qrbill.dev"
-    line (default: `false`). Placement depends on `:output_size`: above the
-    payment slip (`:a4`), at the bottom edge of the payment part
-    (`:payment_slip`), or below the code on a slightly taller canvas
-    (`:qr_code`).
-  """
+  # Internal — use SwissQrBill.to_pdf/2, which validates the bill first.
+  # Rendering assumes validated input (field lengths, character set).
+  @doc false
   @spec render(map(), keyword()) :: {:ok, binary()} | {:error, String.t()}
   def render(bill, opts \\ []) do
     language = Keyword.get(opts, :language, :de)
@@ -90,8 +111,17 @@ defmodule SwissQrBill.Output.PdfOutput do
 
     case QrGen.to_matrix(qr_data) do
       {:ok, matrix} ->
-        pdf_binary = render_size(output_size, bill, matrix, language, branding)
-        {:ok, pdf_binary}
+        # Safety net: any raise inside the Pdf GenServer (e.g. an unencodable
+        # character that slipped past sanitize_text/1) surfaces to the caller
+        # as an EXIT from GenServer.call — convert it to an error tuple
+        # instead of taking the calling process down.
+        try do
+          {:ok, render_size(output_size, bill, matrix, language, branding)}
+        rescue
+          e -> {:error, "PDF rendering failed: #{Exception.message(e)}"}
+        catch
+          :exit, reason -> {:error, "PDF rendering failed: #{inspect(reason)}"}
+        end
 
       {:error, reason} ->
         {:error, reason}
@@ -124,6 +154,7 @@ defmodule SwissQrBill.Output.PdfOutput do
       |> Pdf.set_font("Helvetica", @payment_value_size)
       |> draw_receipt(bill, language, 0)
       |> draw_payment_part(bill, matrix, language, 0)
+      |> draw_separate_note(language)
       |> draw_branding(branding, language, :a4)
       |> Pdf.export()
     end)
@@ -141,7 +172,27 @@ defmodule SwissQrBill.Output.PdfOutput do
     end)
   end
 
+  # "Separate before paying in" — required above the payment part when the
+  # QR-bill is delivered as a PDF / printed on non-perforated paper, which is
+  # exactly the :a4 case. Centered directly above the slip's top edge.
+  defp draw_separate_note(pdf, lang) do
+    pdf
+    |> Pdf.set_font("Helvetica", @payment_heading_size)
+    |> Pdf.text_wrap!(
+      {0, (@total_height + 4) * @mm},
+      {@total_width * @mm, 4 * @mm},
+      Translation.get(:separate, lang),
+      align: :center
+    )
+    |> Pdf.set_font("Helvetica", @payment_value_size)
+  end
+
   defp draw_branding(pdf, false, _lang, _placement), do: pdf
+
+  # The style guide permits no additional content inside the standardized
+  # 210x105 mm payment part, so branding is only drawn where there is canvas
+  # outside it: above the slip (:a4) or on the extra strip (:qr_code).
+  defp draw_branding(pdf, true, _lang, :payment_slip), do: pdf
 
   defp draw_branding(pdf, true, lang, placement) do
     text = Translation.get(:branding, lang)
@@ -154,28 +205,16 @@ defmodule SwissQrBill.Output.PdfOutput do
     |> Pdf.set_font("Helvetica", @payment_value_size)
   end
 
-  # Centered just above the payment slip's top edge — outside the standardized
-  # payment part, so the slip itself stays untouched.
+  # Centered above the payment slip's top edge, one band above the
+  # "Separate before paying in" note — outside the standardized payment part,
+  # so the slip itself stays untouched.
   defp draw_branding_text(pdf, text, :a4) do
     Pdf.text_wrap!(
       pdf,
-      {0, (@total_height + 4) * @mm},
+      {0, (@total_height + 8) * @mm},
       {@total_width * @mm, 4 * @mm},
       text,
       align: :center
-    )
-  end
-
-  # Bottom-right edge of the payment part, below the content sections.
-  defp draw_branding_text(pdf, text, :payment_slip) do
-    x = (@receipt_width + 5) * @mm
-
-    Pdf.text_wrap!(
-      pdf,
-      {x, 3.5 * @mm},
-      {(@total_width - 5) * @mm - x, 3.5 * @mm},
-      text,
-      align: :right
     )
   end
 
@@ -261,16 +300,16 @@ defmodule SwissQrBill.Output.PdfOutput do
     pdf =
       pdf
       |> Pdf.set_font("Helvetica", h, bold: true)
-      |> Pdf.text_at({x, currency_y + @line_height_pt}, Translation.get(:currency, lang))
+      |> Pdf.text_at({x, currency_y + @heading_gap}, Translation.get(:currency, lang))
       |> Pdf.set_font("Helvetica", v)
-      |> Pdf.text_at({x, currency_y}, bill.payment_amount.currency)
+      |> Pdf.text_at({x, currency_y}, sanitize_text(bill.payment_amount.currency))
 
     amount_x = x + 18 * @mm
 
     pdf =
       pdf
       |> Pdf.set_font("Helvetica", h, bold: true)
-      |> Pdf.text_at({amount_x, currency_y + @line_height_pt}, Translation.get(:amount, lang))
+      |> Pdf.text_at({amount_x, currency_y + @heading_gap}, Translation.get(:amount, lang))
       |> Pdf.set_font("Helvetica", v)
 
     pdf =
@@ -279,12 +318,18 @@ defmodule SwissQrBill.Output.PdfOutput do
         formatted -> Pdf.text_at(pdf, {amount_x, currency_y}, formatted)
       end
 
-    # Acceptance point
+    # Acceptance point — right-aligned to the receipt's text edge (57 mm)
+    # per the style guide, so the right edge is stable across languages.
     ap_y = 10 * @mm
 
     pdf
     |> Pdf.set_font("Helvetica", h, bold: true)
-    |> Pdf.text_at({x + 20 * @mm, ap_y}, Translation.get(:acceptance_point, lang))
+    |> Pdf.text_wrap!(
+      {x, ap_y + 2 * @mm},
+      {@receipt_text_width, 4 * @mm},
+      Translation.get(:acceptance_point, lang),
+      align: :right
+    )
   end
 
   defp draw_payment_part(pdf, bill, matrix, lang, _offset_y) do
@@ -336,21 +381,13 @@ defmodule SwissQrBill.Output.PdfOutput do
   end
 
   defp draw_swiss_cross(pdf, qr_x, qr_y, qr_size) do
-    # Swiss cross: centered, 7x7mm on a white background
+    # Swiss cross: centered, 7x7mm total per the style guide — no extra
+    # cleared border (the ECC-M redundancy covers the logo area).
     cross_size = 7 * @mm
     cx = qr_x + (qr_size - cross_size) / 2
     cy = qr_y + (qr_size - cross_size) / 2
 
-    border = 1 * @mm
-
     pdf
-    # White background with border
-    |> Pdf.set_fill_color(:white)
-    |> Pdf.rectangle(
-      {cx - border, cy - border},
-      {cross_size + 2 * border, cross_size + 2 * border}
-    )
-    |> Pdf.fill()
     # Black square
     |> Pdf.set_fill_color(:black)
     |> Pdf.rectangle({cx, cy}, {cross_size, cross_size})
@@ -373,15 +410,18 @@ defmodule SwissQrBill.Output.PdfOutput do
   defp draw_payment_amount(pdf, bill, lang, x, y) do
     pdf
     |> Pdf.set_font("Helvetica", @payment_heading_size, bold: true)
-    |> Pdf.text_at({x, y + @line_height_pt}, Translation.get(:currency, lang))
+    |> Pdf.text_at({x, y + @heading_gap}, Translation.get(:currency, lang))
     |> Pdf.set_font("Helvetica", @payment_value_size)
-    |> Pdf.text_at({x, y}, bill.payment_amount.currency)
+    |> Pdf.text_at({x, y}, sanitize_text(bill.payment_amount.currency))
     |> Pdf.set_font("Helvetica", @payment_heading_size, bold: true)
-    |> Pdf.text_at({x + 18 * @mm, y + @line_height_pt}, Translation.get(:amount, lang))
+    |> Pdf.text_at({x + 18 * @mm, y + @heading_gap}, Translation.get(:amount, lang))
     |> Pdf.set_font("Helvetica", @payment_value_size)
     |> then(fn pdf ->
       case PaymentAmount.formatted_amount(bill.payment_amount) do
-        "" -> draw_corner_marks(pdf, x + 18 * @mm, y - 3 * @mm, 30 * @mm, 10 * @mm)
+        # Blank amount box on the payment part: 40 x 15 mm per the style
+        # guide (the 30 x 10 mm box is receipt-only). Top edge 2 mm below
+        # the "Amount" heading baseline.
+        "" -> draw_corner_marks(pdf, x + 18 * @mm, y - 13 * @mm, 40 * @mm, 15 * @mm)
         formatted -> Pdf.text_at(pdf, {x + 18 * @mm, y}, formatted)
       end
     end)
@@ -491,7 +531,7 @@ defmodule SwissQrBill.Output.PdfOutput do
     top = Pdf.cursor(pdf)
     # height = distance to the page bottom: generous, so all lines render.
     {pdf, _result} =
-      Pdf.text_wrap(pdf, {x, top}, {max_w, top}, soft_break(text),
+      Pdf.text_wrap(pdf, {x, top}, {max_w, top}, text |> sanitize_text() |> soft_break(),
         leading: leading,
         align: :left
       )
@@ -499,9 +539,43 @@ defmodule SwissQrBill.Output.PdfOutput do
     pdf
   end
 
-  # Inserts zero-width spaces into over-long tokens so the wrapper can break
-  # them mid-word when a column is too narrow. The ZWSP is invisible and is only
-  # consumed as a break point when a line would otherwise overflow, so tokens
+  # Transliterates codepoints the pdf library's WinAnsi encoding cannot
+  # represent, so a validated bill (full §4.1.1 charset) always renders instead
+  # of crashing the Pdf process. Also doubles backslashes: the pdf library
+  # escapes parentheses in PDF string literals but not the escape character
+  # itself, so a lone backslash would corrupt the content stream. Applied only
+  # to printed text; the QR payload keeps the original characters.
+  # Public for testing.
+  @doc false
+  def sanitize_text(text) do
+    text
+    |> String.replace("\\", "\\\\")
+    |> String.codepoints()
+    |> Enum.map_join(&sanitize_codepoint/1)
+  end
+
+  defp sanitize_codepoint(cp) do
+    cond do
+      winansi?(cp) -> cp
+      mapped = @transliterations[cp] -> mapped
+      true -> strip_diacritics(cp)
+    end
+  end
+
+  defp strip_diacritics(cp) do
+    base =
+      cp
+      |> String.normalize(:nfd)
+      |> String.replace(~r/\p{Mn}/u, "")
+
+    if base != "" and winansi?(base), do: base, else: "?"
+  end
+
+  defp winansi?(cp), do: Pdf.Encoding.WinAnsi.encode(cp, "") != ""
+
+  # Inserts soft hyphens into over-long tokens so the wrapper can break them
+  # mid-word when a column is too narrow. Unused soft hyphens are dropped by
+  # the wrapper; a used one renders as a hyphen at the break point. Tokens
   # that fit are left untouched. Public for testing.
   @doc false
   def soft_break(text) do
@@ -515,7 +589,7 @@ defmodule SwissQrBill.Output.PdfOutput do
       token
       |> String.graphemes()
       |> Enum.chunk_every(@max_token_length)
-      |> Enum.map_join(@zero_width_space, &Enum.join/1)
+      |> Enum.map_join(@soft_hyphen, &Enum.join/1)
     else
       token
     end

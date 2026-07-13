@@ -47,21 +47,24 @@ defmodule SwissQrBill.Output.PdfBrandingTest do
     end
 
     test "renders localized text for the bill language" do
-      assert {:ok, de} = SwissQrBill.to_pdf(sample_bill(), language: :de, branding: true)
+      # Branding is only drawn outside the standardized slip, so use :a4
+      opts = [output_size: :a4, branding: true]
+
+      assert {:ok, de} = SwissQrBill.to_pdf(sample_bill(), [language: :de] ++ opts)
       assert pdf_text(de) =~ "Erstellt mit qrbill.dev"
 
-      assert {:ok, en} = SwissQrBill.to_pdf(sample_bill(), language: :en, branding: true)
+      assert {:ok, en} = SwissQrBill.to_pdf(sample_bill(), [language: :en] ++ opts)
       assert pdf_text(en) =~ "Created by qrbill.dev"
 
       # fr/it/rm contain non-ASCII (WinAnsi-encoded) — assert the stable part
       for lang <- [:fr, :it, :rm] do
-        assert {:ok, pdf} = SwissQrBill.to_pdf(sample_bill(), language: lang, branding: true)
+        assert {:ok, pdf} = SwissQrBill.to_pdf(sample_bill(), [language: lang] ++ opts)
         assert pdf_text(pdf) =~ "qrbill.dev", "missing branding for #{lang}"
       end
     end
 
-    test "renders for all output sizes" do
-      for size <- [:payment_slip, :a4, :qr_code] do
+    test "renders for :a4 and :qr_code" do
+      for size <- [:a4, :qr_code] do
         assert {:ok, pdf} =
                  SwissQrBill.to_pdf(sample_bill(),
                    language: :de,
@@ -73,8 +76,22 @@ defmodule SwissQrBill.Output.PdfBrandingTest do
       end
     end
 
+    test "is not drawn inside the standardized :payment_slip" do
+      # The style guide permits no additional content inside the 210x105mm
+      # payment part, so branding is skipped for :payment_slip.
+      assert {:ok, pdf} =
+               SwissQrBill.to_pdf(sample_bill(),
+                 language: :de,
+                 output_size: :payment_slip,
+                 branding: true
+               )
+
+      refute pdf_text(pdf) =~ "qrbill.dev"
+    end
+
     test "qr_code canvas grows by 4mm only when branded" do
       assert {:ok, plain} = SwissQrBill.to_pdf(sample_bill(), output_size: :qr_code)
+
       assert {:ok, branded} =
                SwissQrBill.to_pdf(sample_bill(), output_size: :qr_code, branding: true)
 
@@ -85,6 +102,7 @@ defmodule SwissQrBill.Output.PdfBrandingTest do
     test "payment_slip and a4 page sizes are unchanged by branding" do
       for size <- [:payment_slip, :a4] do
         assert {:ok, plain} = SwissQrBill.to_pdf(sample_bill(), output_size: size)
+
         assert {:ok, branded} =
                  SwissQrBill.to_pdf(sample_bill(), output_size: size, branding: true)
 

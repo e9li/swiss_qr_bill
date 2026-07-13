@@ -13,12 +13,15 @@ defmodule SwissQrBill.Validation do
     AlternativeScheme
   }
 
-  @max_amount 999_999_999.99
+  require Logger
 
-  # Unicode ranges allowed in Swiss QR code per spec
+  @max_amount Decimal.new("999999999.99")
+  @min_amount Decimal.new("0.01")
+
+  # Character set permitted in the Swiss QR Code per SIX IG QR-bill §4.1.1:
   # Basic Latin (U+0020-U+007E), Latin-1 Supplement (U+00A0-U+00FF),
-  # Latin Extended-A (U+0100-U+017F)
-  @allowed_chars_regex ~r/^[\x{0020}-\x{007E}\x{00A0}-\x{00FF}\x{0100}-\x{017F}]*$/u
+  # Latin Extended-A (U+0100-U+017F), plus Ș ș Ț ț (U+0218-U+021B) and € (U+20AC).
+  @allowed_chars_regex ~r/^[\x{0020}-\x{007E}\x{00A0}-\x{00FF}\x{0100}-\x{017F}\x{0218}-\x{021B}\x{20AC}]*$/u
 
   @doc """
   Validates a complete QR bill. Returns `{:ok, bill}` or `{:error, errors}`.
@@ -36,9 +39,54 @@ defmodule SwissQrBill.Validation do
       |> validate_debtor(bill)
       |> Enum.reverse()
 
+    Enum.each(warnings(bill), &Logger.warning/1)
+
     case errors do
       [] -> {:ok, bill}
       errors -> {:error, errors}
+    end
+  end
+
+  @doc """
+  Returns non-blocking advisory warnings for a bill (these do not affect validity).
+
+  Currently warns when the QR-IBAN / QR-reference (QRR) combination is used with a
+  non-CHF currency. Per SIX IG QR-bill v2.4 this combination is reserved for CHF;
+  EUR invoices must use a regular IBAN with a Creditor Reference (SCOR) or no
+  reference (NON). It becomes a hard rejection once euroSIC is discontinued
+  (EUR QR-bills move to SEPA Credit Transfer by November 2027 at the latest).
+  """
+  @spec warnings(map()) :: [String.t()]
+  def warnings(bill) do
+    []
+    |> warn_qr_reference_currency(bill)
+    |> Enum.reverse()
+  end
+
+  defp warn_qr_reference_currency(warnings, bill) do
+    currency =
+      case Map.get(bill, :payment_amount) do
+        %PaymentAmount{currency: c} -> c
+        _ -> nil
+      end
+
+    qrr? = match?(%PaymentReference{type: :qrr}, Map.get(bill, :payment_reference))
+
+    qr_iban? =
+      case Map.get(bill, :creditor_information) do
+        %CreditorInformation{} = ci -> CreditorInformation.qr_iban?(ci)
+        _ -> false
+      end
+
+    if currency == "EUR" and (qrr? or qr_iban?) do
+      [
+        "QR-IBAN/QR-reference (QRR) is only valid for invoices in CHF (SIX IG QR-bill v2.4). " <>
+          "For #{currency} invoices use a regular IBAN with a Creditor Reference (SCOR) or " <>
+          "no reference (NON). This will be rejected once euroSIC is discontinued (by November 2027)."
+        | warnings
+      ]
+    else
+      warnings
     end
   end
 
@@ -53,6 +101,10 @@ defmodule SwissQrBill.Validation do
       {:ok, _} -> errors
       {:error, reason} -> ["invalid IBAN: #{reason}" | errors]
     end
+  end
+
+  defp validate_creditor_information(errors, _) do
+    ["creditor_information must be a CreditorInformation struct" | errors]
   end
 
   defp validate_creditor(errors, %{creditor: nil}) do
@@ -78,10 +130,24 @@ defmodule SwissQrBill.Validation do
       end
 
     case amount do
-      nil -> errors
-      a when is_number(a) and a >= 0 and a <= @max_amount -> errors
-      _ -> ["amount must be between 0 and #{@max_amount}" | errors]
+      nil ->
+        errors
+
+      # Finite decimals only — NaN/Infinity (coef :NaN/:inf) would crash compare/2
+      %Decimal{coef: coef} = a when is_integer(coef) ->
+        if Decimal.compare(a, @min_amount) != :lt and Decimal.compare(a, @max_amount) != :gt do
+          errors
+        else
+          ["amount must be between #{@min_amount} and #{@max_amount}" | errors]
+        end
+
+      _ ->
+        ["amount must be a valid number" | errors]
     end
+  end
+
+  defp validate_payment_amount(errors, _) do
+    ["payment_amount must be a PaymentAmount struct" | errors]
   end
 
   defp validate_payment_reference(errors, %{payment_reference: nil}) do
@@ -94,6 +160,9 @@ defmodule SwissQrBill.Validation do
     cond do
       is_nil(ref) or ref == "" ->
         ["QRR reference is required" | errors]
+
+      not is_binary(ref) ->
+        ["QRR reference must be a string" | errors]
 
       not Regex.match?(~r/^[0-9]{27}$/, ref) ->
         ["QRR reference must be exactly 27 digits" | errors]
@@ -113,6 +182,9 @@ defmodule SwissQrBill.Validation do
       is_nil(ref) or ref == "" ->
         ["SCOR reference is required" | errors]
 
+      not is_binary(ref) ->
+        ["SCOR reference must be a string" | errors]
+
       not valid_creditor_reference?(ref) ->
         ["SCOR reference is invalid (ISO 11649)" | errors]
 
@@ -129,6 +201,15 @@ defmodule SwissQrBill.Validation do
     else
       ["NON reference type must have no reference" | errors]
     end
+  end
+
+  # Hand-built structs can carry any type atom; report instead of raising
+  defp validate_payment_reference(errors, %{payment_reference: %PaymentReference{}}) do
+    ["payment_reference type must be :qrr, :scor or :non" | errors]
+  end
+
+  defp validate_payment_reference(errors, _) do
+    ["payment_reference must be a PaymentReference struct" | errors]
   end
 
   defp validate_creditor_reference_combination(errors, %{
@@ -156,36 +237,55 @@ defmodule SwissQrBill.Validation do
   defp validate_additional_information(errors, %{
          additional_information: %AdditionalInformation{message: msg, bill_information: bi}
        }) do
-    errors =
-      if is_binary(msg) and String.length(msg) > 140 do
-        ["message must be at most 140 characters" | errors]
-      else
-        errors
-      end
+    errors
+    |> validate_optional_field(msg, "message", 140)
+    |> validate_optional_field(bi, "bill_information", 140)
+    |> validate_combined_information_length(msg, bi)
+  end
 
-    if is_binary(bi) and String.length(bi) > 140 do
-      ["bill_information must be at most 140 characters" | errors]
+  # Per SIX IG QR-bill §4.3.3 / data element table: the unstructured message and the
+  # billing information may together contain at most 140 characters.
+  defp validate_combined_information_length(errors, msg, bi) do
+    if text_length(msg) + text_length(bi) > 140 do
+      ["message and bill_information together must not exceed 140 characters" | errors]
     else
       errors
     end
   end
+
+  # Non-binary values are reported by validate_optional_field; count them as 0
+  defp text_length(value) when is_binary(value), do: String.length(value)
+  defp text_length(_), do: 0
 
   defp validate_alternative_schemes(errors, %{alternative_schemes: schemes})
        when is_list(schemes) do
     if length(schemes) > 2 do
       ["maximum 2 alternative schemes allowed" | errors]
     else
-      Enum.reduce(schemes, errors, fn %AlternativeScheme{parameter: p}, acc ->
-        cond do
-          is_nil(p) or p == "" ->
-            ["alternative scheme parameter is required" | acc]
+      Enum.reduce(schemes, errors, fn
+        %AlternativeScheme{parameter: p}, acc ->
+          cond do
+            is_nil(p) or p == "" ->
+              ["alternative scheme parameter is required" | acc]
 
-          String.length(p) > 100 ->
-            ["alternative scheme parameter must be at most 100 characters" | acc]
+            not is_binary(p) ->
+              ["alternative scheme parameter must be a string" | acc]
 
-          true ->
-            acc
-        end
+            String.length(p) > 100 ->
+              ["alternative scheme parameter must be at most 100 characters" | acc]
+
+            not valid_characters?(p) ->
+              [
+                "alternative scheme parameter contains characters not permitted in the Swiss QR code"
+                | acc
+              ]
+
+            true ->
+              acc
+          end
+
+        _other, acc ->
+          ["alternative schemes must be AlternativeScheme structs" | acc]
       end)
     end
   end
@@ -208,55 +308,78 @@ defmodule SwissQrBill.Validation do
     |> validate_country(addr.country, field)
   end
 
+  defp validate_address(errors, _other, field) do
+    ["#{field} must be a SwissQrBill.Address struct" | errors]
+  end
+
   defp validate_required_field(errors, value, label, max_length) do
     cond do
       is_nil(value) or value == "" ->
         ["#{label} is required" | errors]
 
+      not is_binary(value) ->
+        ["#{label} must be a string" | errors]
+
       String.length(value) > max_length ->
         ["#{label} must be at most #{max_length} characters" | errors]
+
+      not valid_characters?(value) ->
+        ["#{label} contains characters not permitted in the Swiss QR code" | errors]
 
       true ->
         errors
     end
   end
 
-  defp validate_optional_field(errors, nil, _label, _max_length), do: errors
+  defp validate_optional_field(errors, value, _label, _max_length) when value in [nil, ""],
+    do: errors
 
   defp validate_optional_field(errors, value, label, max_length) when is_binary(value) do
-    if String.length(value) > max_length do
-      ["#{label} must be at most #{max_length} characters" | errors]
-    else
-      errors
+    cond do
+      String.length(value) > max_length ->
+        ["#{label} must be at most #{max_length} characters" | errors]
+
+      not valid_characters?(value) ->
+        ["#{label} contains characters not permitted in the Swiss QR code" | errors]
+
+      true ->
+        errors
     end
   end
 
+  defp validate_optional_field(errors, _value, label, _max_length) do
+    ["#{label} must be a string" | errors]
+  end
+
   defp validate_country(errors, country, field) do
-    if is_nil(country) or not Regex.match?(~r/^[A-Z]{2}$/, country) do
-      ["#{field} country must be a 2-letter ISO code" | errors]
-    else
+    if is_binary(country) and Regex.match?(~r/^[A-Z]{2}$/, country) do
       errors
+    else
+      ["#{field} country must be a 2-letter ISO code" | errors]
     end
   end
 
   @doc """
   Validates the mod-10 recursive check digit of a QR reference.
   Uses the standard Swiss modulo-10 table.
+  Returns `false` for empty or non-digit input.
   """
   @spec valid_mod10_check_digit?(String.t()) :: boolean()
   def valid_mod10_check_digit?(reference) do
+    is_binary(reference) and Regex.match?(~r/^[0-9]+$/, reference) and
+      mod10_carry(reference) == 0
+  end
+
+  defp mod10_carry(digits) do
     table = [0, 9, 4, 6, 8, 2, 7, 1, 3, 5]
 
-    carry =
-      reference
-      |> String.graphemes()
-      |> Enum.reduce(0, fn digit, carry ->
-        {d, ""} = Integer.parse(digit)
-        table_index = rem(carry + d, 10)
-        Enum.at(table, table_index)
-      end)
-
-    carry == 0
+    digits
+    |> String.graphemes()
+    |> Enum.reduce(0, fn digit, carry ->
+      {d, ""} = Integer.parse(digit)
+      table_index = rem(carry + d, 10)
+      Enum.at(table, table_index)
+    end)
   end
 
   @doc """

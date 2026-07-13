@@ -4,7 +4,14 @@ defmodule SwissQrBill.QrCodeData do
   The payload is a newline-separated string of fields in a strict order.
   """
 
-  alias SwissQrBill.{Address, CreditorInformation, PaymentAmount, PaymentReference, AdditionalInformation, AlternativeScheme}
+  alias SwissQrBill.{
+    Address,
+    CreditorInformation,
+    PaymentAmount,
+    PaymentReference,
+    AdditionalInformation,
+    AlternativeScheme
+  }
 
   @header_qr_type "SPC"
   @header_version "0200"
@@ -80,7 +87,9 @@ defmodule SwissQrBill.QrCodeData do
   # insert an empty line before alternative schemes
   defp maybe_add_empty_line(elements, bill) do
     has_alt_schemes = is_list(bill.alternative_schemes) and bill.alternative_schemes != []
-    has_bill_info = bill.additional_information != nil and bill.additional_information.bill_information != nil
+
+    has_bill_info =
+      bill.additional_information != nil and bill.additional_information.bill_information != nil
 
     if has_alt_schemes and not has_bill_info do
       [[nil] | elements]

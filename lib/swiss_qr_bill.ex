@@ -1,6 +1,7 @@
 defmodule SwissQrBill do
   @moduledoc """
-  Swiss QR-bill generation library per SIX IG QR-bill v2.3.
+  Swiss QR-bill generation library per SIX IG QR-bill v2.4
+  (also valid under v2.3, which remains in force until November 2027).
 
   Generates the complete payment part (Zahlteil) with receipt in three output formats:
   PDF, SVG (text as paths), and PNG (rasterized at configurable DPI).
@@ -100,9 +101,10 @@ defmodule SwissQrBill do
   end
 
   @doc """
-  Sets the payment amount. Amount can be nil for bills without a fixed amount.
+  Sets the payment amount. The amount can be a `Decimal`, a number, or a decimal
+  string, or nil for bills without a fixed amount.
   """
-  @spec set_payment_amount(t(), String.t(), float() | nil) :: t()
+  @spec set_payment_amount(t(), String.t(), Decimal.t() | number() | String.t() | nil) :: t()
   def set_payment_amount(%__MODULE__{} = bill, currency, amount \\ nil) do
     %{bill | payment_amount: PaymentAmount.new(currency, amount)}
   end

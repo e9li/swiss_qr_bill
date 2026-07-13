@@ -1,7 +1,7 @@
 defmodule SwissQrBillTest do
   use ExUnit.Case
 
-  alias SwissQrBill.Address
+  alias SwissQrBill.{Address, Validation}
 
   defp sample_bill do
     creditor = Address.new("Muster AG", "Bahnhofstrasse", "1", "8001", "Zürich", "CH")
@@ -39,6 +39,17 @@ defmodule SwissQrBillTest do
     |> SwissQrBill.set_payment_reference(:scor, ref)
   end
 
+  defp eur_qr_iban_bill do
+    creditor = Address.new("Muster AG", "Bahnhofstrasse", "1", "8001", "Zürich", "CH")
+    {:ok, ref} = SwissQrBill.Reference.QrReferenceGenerator.generate("210000", "313947143000901")
+
+    SwissQrBill.new()
+    |> SwissQrBill.set_creditor(creditor)
+    |> SwissQrBill.set_creditor_information("CH44 3199 9123 0008 8901 2")
+    |> SwissQrBill.set_payment_amount("EUR", 100.0)
+    |> SwissQrBill.set_payment_reference(:qrr, ref)
+  end
+
   describe "new/0" do
     test "creates empty bill" do
       bill = SwissQrBill.new()
@@ -54,12 +65,16 @@ defmodule SwissQrBillTest do
 
   describe "builder functions" do
     test "set_creditor/2 sets creditor address" do
-      bill = SwissQrBill.new() |> SwissQrBill.set_creditor(Address.new("Test", "8000", "Zürich", "CH"))
+      bill =
+        SwissQrBill.new() |> SwissQrBill.set_creditor(Address.new("Test", "8000", "Zürich", "CH"))
+
       assert bill.creditor.name == "Test"
     end
 
     test "set_creditor_information/2 with string IBAN" do
-      bill = SwissQrBill.new() |> SwissQrBill.set_creditor_information("CH93 0076 2011 6238 5295 7")
+      bill =
+        SwissQrBill.new() |> SwissQrBill.set_creditor_information("CH93 0076 2011 6238 5295 7")
+
       assert bill.creditor_information.iban == "CH9300762011623852957"
     end
 
@@ -78,11 +93,13 @@ defmodule SwissQrBillTest do
     test "set_payment_amount/3 with currency and amount" do
       bill = SwissQrBill.new() |> SwissQrBill.set_payment_amount("EUR", 100.50)
       assert bill.payment_amount.currency == "EUR"
-      assert bill.payment_amount.amount == 100.50
+      assert Decimal.equal?(bill.payment_amount.amount, Decimal.new("100.50"))
     end
 
     test "set_debtor/2 sets debtor address" do
-      bill = SwissQrBill.new() |> SwissQrBill.set_debtor(Address.new("Debtor", "3000", "Bern", "CH"))
+      bill =
+        SwissQrBill.new() |> SwissQrBill.set_debtor(Address.new("Debtor", "3000", "Bern", "CH"))
+
       assert bill.debtor.name == "Debtor"
     end
 
@@ -202,6 +219,159 @@ defmodule SwissQrBillTest do
         |> SwissQrBill.add_alternative_scheme("eBill/B/123")
 
       assert {:ok, _} = SwissQrBill.validate(bill)
+    end
+  end
+
+  describe "v2.4 conformance" do
+    test "amount below the 0.01 minimum fails" do
+      bill = SwissQrBill.set_payment_amount(sample_bill(), "CHF", 0.0)
+      assert {:error, errors} = SwissQrBill.validate(bill)
+      assert Enum.any?(errors, &String.contains?(&1, "amount"))
+    end
+
+    test "message and bill information exceeding 140 characters combined fails" do
+      bill =
+        SwissQrBill.set_additional_information(
+          sample_bill(),
+          String.duplicate("a", 100),
+          String.duplicate("b", 50)
+        )
+
+      assert {:error, errors} = SwissQrBill.validate(bill)
+      assert Enum.any?(errors, &String.contains?(&1, "together must not exceed 140"))
+    end
+
+    test "name with characters outside the QR character set fails" do
+      creditor = Address.new("Muster 🎉 AG", "Bahnhofstrasse", "1", "8001", "Zürich", "CH")
+      bill = %{sample_bill() | creditor: creditor}
+      assert {:error, errors} = SwissQrBill.validate(bill)
+      assert Enum.any?(errors, &String.contains?(&1, "not permitted"))
+    end
+
+    test "Euro sign in the message is accepted" do
+      bill = SwissQrBill.set_additional_information(scor_bill(), "Invoice total €199.95")
+      assert {:ok, _} = SwissQrBill.validate(bill)
+    end
+
+    test "EUR with QR-IBAN/QRR validates but emits a non-blocking warning" do
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, _} = SwissQrBill.validate(eur_qr_iban_bill())
+        end)
+
+      assert log =~ "only valid for invoices in CHF"
+    end
+
+    test "warnings/1 flags EUR + QR-IBAN and is silent for EUR + SCOR" do
+      assert [warning] = Validation.warnings(eur_qr_iban_bill())
+      assert warning =~ "CHF"
+      assert Validation.warnings(scor_bill()) == []
+    end
+  end
+
+  describe "crash-surface hardening" do
+    test "NaN amount string is reported, not raised" do
+      bill = SwissQrBill.set_payment_amount(sample_bill(), "CHF", "NaN")
+      assert {:error, errors} = SwissQrBill.validate(bill)
+      assert Enum.any?(errors, &String.contains?(&1, "amount must be a valid number"))
+    end
+
+    test "hand-passed NaN/Infinity Decimals are reported, not raised" do
+      for special <- ["NaN", "Infinity", "-Infinity"] do
+        bill = %{
+          sample_bill()
+          | payment_amount: %SwissQrBill.PaymentAmount{
+              currency: "CHF",
+              amount: Decimal.new(special)
+            }
+        }
+
+        assert {:error, errors} = SwissQrBill.validate(bill)
+        assert Enum.any?(errors, &String.contains?(&1, "amount")), "failed for #{special}"
+      end
+    end
+
+    test "unknown reference type is rejected at construction" do
+      assert_raise FunctionClauseError, fn ->
+        SwissQrBill.set_payment_reference(sample_bill(), :cor, "RF15I20200631")
+      end
+    end
+
+    test "hand-built struct with unknown reference type is reported, not raised" do
+      bill = %{
+        sample_bill()
+        | payment_reference: %SwissQrBill.PaymentReference{type: :cor, reference: "x"}
+      }
+
+      assert {:error, errors} = SwissQrBill.validate(bill)
+      assert Enum.any?(errors, &String.contains?(&1, ":qrr, :scor or :non"))
+    end
+
+    test "validate/1 never raises for wrong-typed field contents" do
+      base = sample_bill()
+
+      malformed = [
+        %{base | creditor: %{name: "not an Address"}},
+        %{base | creditor: Map.put(base.creditor, :name, 123)},
+        %{base | creditor: Map.put(base.creditor, :postal_code, {:tuple})},
+        %{base | creditor: Map.put(base.creditor, :street, :atom)},
+        %{base | creditor: Map.put(base.creditor, :country, :CH)},
+        %{base | creditor_information: "CH123"},
+        %{base | creditor_information: %SwissQrBill.CreditorInformation{iban: 123}},
+        %{base | payment_amount: %{currency: "CHF"}},
+        %{base | payment_amount: %SwissQrBill.PaymentAmount{currency: :chf, amount: :nan}},
+        %{base | payment_reference: "QRR"},
+        %{
+          base
+          | payment_reference: %SwissQrBill.PaymentReference{type: :qrr, reference: 123}
+        },
+        %{
+          base
+          | payment_reference: %SwissQrBill.PaymentReference{type: :scor, reference: %{}}
+        },
+        %{
+          base
+          | additional_information: %SwissQrBill.AdditionalInformation{
+              message: :oops,
+              bill_information: %{}
+            }
+        },
+        %{base | alternative_schemes: ["not a struct"]},
+        %{base | alternative_schemes: [%SwissQrBill.AlternativeScheme{parameter: 42}]},
+        %{base | debtor: %{}}
+      ]
+
+      for bill <- malformed do
+        assert {:error, errors} = SwissQrBill.validate(bill)
+        assert is_list(errors) and errors != []
+      end
+    end
+
+    test "constructors coerce plausible integer inputs" do
+      addr = SwissQrBill.Address.new("Muster AG", 8001, "Zürich", "CH")
+      assert addr.postal_code == "8001"
+
+      addr6 = SwissQrBill.Address.new("Muster AG", "Bahnhofstrasse", 1, 8001, "Zürich", "CH")
+      assert addr6.building_number == "1"
+      assert addr6.postal_code == "8001"
+
+      pr = SwissQrBill.PaymentReference.new(:qrr, 210_000_000_003_139_471_430_009_017)
+      assert pr.reference == "210000000003139471430009017"
+    end
+
+    test "non-binary currency is reported, not raised" do
+      bill = %{sample_bill() | payment_amount: SwissQrBill.PaymentAmount.new(:chf, 10)}
+      assert {:error, errors} = SwissQrBill.validate(bill)
+      assert Enum.any?(errors, &String.contains?(&1, "currency"))
+    end
+  end
+
+  describe "PNG dpi bounds" do
+    test "rejects out-of-range and non-integer dpi" do
+      for dpi <- [0, 35, 2401, 100_000, -300, 30.5, "300"] do
+        assert {:error, message} = SwissQrBill.to_png(sample_bill(), dpi: dpi)
+        assert message =~ "dpi", "expected dpi error for #{inspect(dpi)}"
+      end
     end
   end
 

@@ -44,8 +44,11 @@ defmodule SwissQrBill.Reference.CreditorReferenceGenerator do
     |> String.graphemes()
     |> Enum.map(fn char ->
       cond do
-        char >= "0" and char <= "9" -> char
-        char >= "A" and char <= "Z" -> Integer.to_string(String.to_charlist(char) |> hd() |> Kernel.-(65) |> Kernel.+(10))
+        char >= "0" and char <= "9" ->
+          char
+
+        char >= "A" and char <= "Z" ->
+          Integer.to_string(String.to_charlist(char) |> hd() |> Kernel.-(65) |> Kernel.+(10))
       end
     end)
     |> Enum.join()

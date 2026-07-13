@@ -1,6 +1,6 @@
 # SwissQrBill
 
-Swiss QR-bill generation library for Elixir, implementing the [SIX QR-bill standard (v2.3)](https://www.six-group.com/dam/download/banking-services/standardization/qr-bill/ig-qr-bill-v2.3-en.pdf).
+Swiss QR-bill generation library for Elixir, implementing the [SIX QR-bill standard (v2.4)](https://www.six-group.com/dam/download/banking-services/standardization/qr-bill/ig-qr-bill-v2.4-en.pdf) — also conformant to v2.3, which remains valid in parallel until November 2027.
 
 Generates the complete payment part (Zahlteil) with receipt as PDF, SVG, or PNG — ready for printing or embedding in invoices.
 
@@ -19,7 +19,7 @@ Add `swiss_qr_bill` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:swiss_qr_bill, "~> 0.1.4"}
+    {:swiss_qr_bill, "~> 0.2.0"}
   ]
 end
 ```
@@ -58,6 +58,8 @@ bill =
   |> SwissQrBill.set_additional_information("Invoice 2024-001")
 ```
 
+> **Amounts** can be a `Decimal`, a number, or a decimal string — e.g. `set_payment_amount("CHF", 2500.25)`, `set_payment_amount("CHF", "2500.25")`, or `set_payment_amount("CHF", Decimal.new("2500.25"))`. They are stored as `Decimal` internally and rounded to two decimal places, so there are no floating-point rounding surprises.
+
 ### Validation
 
 ```elixir
@@ -67,7 +69,16 @@ bill =
 # errors is a list of descriptive strings
 ```
 
-Validates IBAN format, QR-IBAN/reference-type compatibility, address fields, character sets, and more.
+Validates IBAN format, QR-IBAN/reference-type compatibility, address fields, the Swiss QR character set, amount range, and field lengths (including the combined 140-character limit on message + billing information).
+
+#### Warnings (non-blocking)
+
+`SwissQrBill.Validation.warnings/1` returns advisory messages that do **not** affect validity (they are also logged via `Logger`). Currently it flags using a QR-IBAN / QR-reference with an **EUR** amount: under v2.4 that combination is reserved for CHF, and it becomes invalid once euroSIC is discontinued (EUR QR-bills move to SEPA Credit Transfer by November 2027 at the latest).
+
+```elixir
+SwissQrBill.Validation.warnings(bill)
+#=> [] for a valid combination, or a list of advisory strings
+```
 
 ### PDF output
 
@@ -88,6 +99,7 @@ File.write!("qr_bill.svg", svg_binary)
 ### PNG output
 
 Rasterized from the PDF at configurable DPI for print-quality output.
+The `:dpi` option accepts integers between 36 and 2400 (default: 300).
 
 ```elixir
 {:ok, png_binary} = SwissQrBill.to_png(bill, language: :de, dpi: 300)
@@ -103,6 +115,10 @@ All three formats support the `:output_size` option:
 | `:payment_slip` | 210 x 105 mm | Payment part with receipt (default) |
 | `:a4` | 210 x 297 mm | Full A4 page with payment part at bottom |
 | `:qr_code` | 56 x 56 mm | QR code only |
+
+For `:a4`, the localized note *"Separate before paying in"* is rendered
+centered above the payment part, as the guidelines require for QR-bills
+delivered as PDF or printed on non-perforated paper.
 
 ```elixir
 {:ok, pdf} = SwissQrBill.to_pdf(bill, language: :de, output_size: :a4)
@@ -132,6 +148,11 @@ All three formats accept the `:branding` option. When `true`, a small gray
 "Created by qrbill.dev" line is added, localized to the bill's `:language`.
 Defaults to `false`, and output without it is unchanged.
 
+Because the style guide permits no additional content inside the standardized
+210 x 105 mm payment part, branding is only drawn for `:a4` (above the slip)
+and `:qr_code` (on an extra strip below the code) — it is skipped for
+`:payment_slip`.
+
 ```elixir
 {:ok, pdf} = SwissQrBill.to_pdf(bill, branding: true)
 {:ok, svg} = SwissQrBill.to_svg(bill, branding: true)
@@ -152,9 +173,9 @@ Placement depends on the `:output_size`:
 
 | Output size | Placement |
 |-------------|-----------|
-| `:a4` | Centered just above the payment slip's top edge (outside the standardized payment part) |
-| `:payment_slip` | Small text at the bottom-right edge of the payment part |
+| `:a4` | Centered above the payment slip's top edge, above the "Separate before paying in" note |
 | `:qr_code` | Below the QR code; the canvas grows by 4 mm (56 x 60 mm) to fit the line |
+| `:payment_slip` | Not drawn (no canvas outside the standardized payment part) |
 
 ## Reference generators
 
@@ -205,12 +226,14 @@ SwissQrBill.IBAN.format("CH4431999123000889012")
 
 ## Reference type and IBAN compatibility
 
-| IBAN type  | Allowed reference types |
-|------------|------------------------|
-| QR-IBAN    | `:qrr` only            |
-| Regular    | `:scor` or `:non`      |
+| IBAN type  | Allowed reference types | Currency |
+|------------|------------------------|----------|
+| QR-IBAN    | `:qrr` only            | CHF only (v2.4) |
+| Regular    | `:scor` or `:non`      | CHF or EUR |
 
 QR-IBANs are identified by their IID (positions 5-9) being in the range 30000-31999.
+
+Under SIX IG v2.4 the QR-IBAN / QR-reference combination is reserved for CHF; for EUR use a regular IBAN with `:scor` or `:non`. `validate/1` still accepts QR-IBAN + EUR today and emits a non-blocking warning (see [Warnings](#warnings-non-blocking)) — this becomes a hard error once euroSIC is discontinued (~November 2027).
 
 ## Minimal bill (no amount, no debtor)
 
@@ -249,7 +272,7 @@ The layout follows the [SIX style guide](https://www.six-group.com/dam/download/
 
 Font sizes follow the style guide per section: the receipt uses 6 pt headings and
 8 pt values, and the payment part uses 8 pt headings and 10 pt values (the title is
-11 pt). Sample outputs for all three sizes and formats are in [`samples/`](samples).
+11 pt). Sample outputs for all three sizes and formats are in [`samples/`](https://github.com/e9li/swiss_qr_bill/tree/main/samples).
 
 ### Long values
 
@@ -263,7 +286,7 @@ where a line would otherwise overflow.
 
 | Field | Constraint |
 |-------|-----------|
-| Amount | 0 to 999,999,999.99 |
+| Amount | 0.01 to 999,999,999.99 |
 | Currency | CHF or EUR |
 | Creditor name | Max 70 characters |
 | Creditor street | Max 70 characters |
@@ -273,16 +296,36 @@ where a line would otherwise overflow.
 | Country | 2-letter ISO code |
 | Message | Max 140 characters |
 | Bill information | Max 140 characters |
+| Message + bill information | Max 140 characters combined |
+| Text fields | Swiss QR character set (Latin + `Ș ș Ț ț €`) |
 | Alt. scheme parameter | Max 100 characters |
 | Alternative schemes | Max 2 |
 | IBAN | CH or LI, 21 characters |
 | QRR reference | 27 digits, valid mod-10 |
 | SCOR reference | RF + check digits + 1-21 alphanumeric |
+| QR payload | Must fit QR version 25 (rejected as `{:error, _}` if larger) |
+
+`validate/1` reports problems as a list of descriptive strings and never
+raises, regardless of what the struct fields contain.
+
+### Character set and printed text
+
+The QR payload accepts the full Swiss QR character set (§4.1.1): Basic Latin,
+Latin-1 Supplement, Latin Extended-A, `Ș ș Ț ț`, and `€`. The *printed* text
+on the payment part is transliterated where the PDF font encoding (WinAnsi)
+has no glyph — e.g. "Ștefan" prints as "Stefan", "Łukasz" as "Lukasz" — while
+the QR code always carries the original characters.
+
+The payment part uses Helvetica, which is not embedded in the PDF; viewers
+and printers substitute a metrically compatible sans-serif (typically Arial,
+Liberation Sans, or Nimbus Sans — the first two are on the style guide's
+permitted list).
 
 ## Dependencies
 
 - [`qr_code`](https://hex.pm/packages/qr_code) — QR code generation
 - [`pdf`](https://hex.pm/packages/pdf) — PDF output
+- [`decimal`](https://hex.pm/packages/decimal) — exact monetary amounts
 - [`poppler-utils`](https://poppler.freedesktop.org/) — SVG and PNG conversion (system dependency, optional)
 
 ## License

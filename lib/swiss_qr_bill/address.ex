@@ -1,7 +1,8 @@
 defmodule SwissQrBill.Address do
   @moduledoc """
   Structured address for Swiss QR bills (type "S").
-  Per v2.3, only structured addresses are allowed.
+  Per SIX v2.3/v2.4, only structured addresses are allowed (the combined address
+  type was removed in v2.3 and the structured address is obligatory from v2.4).
   """
 
   @type t :: %__MODULE__{
@@ -29,7 +30,7 @@ defmodule SwissQrBill.Address do
       building_number: clean(building_number),
       postal_code: clean(postal_code),
       city: clean(city),
-      country: String.upcase(String.trim(country))
+      country: normalize_country(country)
     }
   end
 
@@ -44,7 +45,7 @@ defmodule SwissQrBill.Address do
       building_number: nil,
       postal_code: clean(postal_code),
       city: clean(city),
-      country: String.upcase(String.trim(country))
+      country: normalize_country(country)
     }
   end
 
@@ -105,4 +106,13 @@ defmodule SwissQrBill.Address do
     |> String.replace(~r/ {2,}/, " ")
     |> String.trim()
   end
+
+  # Integers are plausible for postal codes and building numbers — coerce them.
+  # Anything else is stored as-is so validation reports it instead of new/4,6
+  # crashing.
+  defp clean(n) when is_integer(n), do: Integer.to_string(n)
+  defp clean(other), do: other
+
+  defp normalize_country(c) when is_binary(c), do: String.upcase(String.trim(c))
+  defp normalize_country(c), do: c
 end

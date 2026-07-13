@@ -15,8 +15,13 @@ defmodule SwissQrBill.CreditorInformation do
   Whitespace is stripped and the IBAN is uppercased.
   """
   @spec new(String.t()) :: t()
-  def new(iban) do
+  def new(iban) when is_binary(iban) do
     %__MODULE__{iban: IBAN.normalize(iban)}
+  end
+
+  # Stored as-is so validation reports an invalid IBAN instead of new/1 crashing.
+  def new(iban) do
+    %__MODULE__{iban: iban}
   end
 
   @doc """

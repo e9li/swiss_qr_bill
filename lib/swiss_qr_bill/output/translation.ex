@@ -7,8 +7,8 @@ defmodule SwissQrBill.Output.Translation do
   @translations %{
     payment_part: %{
       de: "Zahlteil",
-      fr: "Section de paiement",
-      it: "Sezione di pagamento",
+      fr: "Section paiement",
+      it: "Sezione pagamento",
       en: "Payment part",
       rm: "Part da pajament"
     },
@@ -17,7 +17,7 @@ defmodule SwissQrBill.Output.Translation do
       fr: "Compte / Payable à",
       it: "Conto / Pagabile a",
       en: "Account / Payable to",
-      rm: "Conto / Pajabel a"
+      rm: "Conto / Da pajar a"
     },
     reference: %{
       de: "Referenz",
@@ -38,7 +38,7 @@ defmodule SwissQrBill.Output.Translation do
       fr: "Monnaie",
       it: "Valuta",
       en: "Currency",
-      rm: "Munaida"
+      rm: "Valuta"
     },
     amount: %{
       de: "Betrag",
@@ -52,49 +52,49 @@ defmodule SwissQrBill.Output.Translation do
       fr: "Récépissé",
       it: "Ricevuta",
       en: "Receipt",
-      rm: "Attest da recepziun"
+      rm: "Quittanza"
     },
     acceptance_point: %{
       de: "Annahmestelle",
       fr: "Point de dépôt",
       it: "Punto di accettazione",
       en: "Acceptance point",
-      rm: "Lieu d'acceptaziun"
+      rm: "Post da recepziun"
     },
     separate: %{
       de: "Vor der Einzahlung abzutrennen",
       fr: "A détacher avant le versement",
       it: "Da staccare prima del versamento",
       en: "Separate before paying in",
-      rm: "Da separar avant il pajament"
+      rm: "Da distatgar avant che pajar"
     },
     payable_by: %{
       de: "Zahlbar durch",
       fr: "Payable par",
       it: "Pagabile da",
       en: "Payable by",
-      rm: "Pajabel da"
+      rm: "Da pajar da"
     },
     payable_by_name: %{
       de: "Zahlbar durch (Name/Adresse)",
       fr: "Payable par (nom/adresse)",
       it: "Pagabile da (nome/indirizzo)",
       en: "Payable by (name/address)",
-      rm: "Pajabel da (num/adressa)"
+      rm: "Da pajar da (num/adressa)"
     },
     in_favor_of: %{
       de: "Zugunsten",
       fr: "En faveur de",
       it: "A favore di",
       en: "In favour of",
-      rm: "A favur da"
+      rm: "En favur da"
     },
     do_not_use_for_payment: %{
       de: "NICHT ZUR ZAHLUNG VERWENDEN",
       fr: "NE PAS UTILISER POUR LE PAIEMENT",
       it: "NON UTILIZZARE PER IL PAGAMENTO",
       en: "DO NOT USE FOR PAYMENT",
-      rm: "NUN DUVRAR PER IL PAJAMENT"
+      rm: "BETG DUVRAR PER IL PAJAMENT"
     },
     branding: %{
       de: "Erstellt mit qrbill.dev",

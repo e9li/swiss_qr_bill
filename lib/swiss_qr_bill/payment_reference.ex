@@ -20,10 +20,10 @@ defmodule SwissQrBill.PaymentReference do
   @type_to_string %{qrr: "QRR", scor: "SCOR", non: "NON"}
 
   @doc """
-  Creates a payment reference.
+  Creates a payment reference. The type must be `:qrr`, `:scor`, or `:non`.
   """
   @spec new(reference_type(), String.t() | nil) :: t()
-  def new(type, reference \\ nil) do
+  def new(type, reference \\ nil) when type in [:qrr, :scor, :non] do
     %__MODULE__{
       type: type,
       reference: normalize_reference(reference)
@@ -80,4 +80,10 @@ defmodule SwissQrBill.PaymentReference do
     cleaned = String.replace(ref, ~r/\s/, "")
     if cleaned == "", do: nil, else: cleaned
   end
+
+  # A 27-digit QR reference is plausibly passed as an integer — coerce it.
+  # Anything else is stored as-is so validation reports it instead of new/2
+  # crashing.
+  defp normalize_reference(ref) when is_integer(ref), do: Integer.to_string(ref)
+  defp normalize_reference(ref), do: ref
 end

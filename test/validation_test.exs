@@ -11,6 +11,13 @@ defmodule SwissQrBill.ValidationTest do
     test "invalid reference" do
       refute Validation.valid_mod10_check_digit?("210000000003139471430009010")
     end
+
+    test "non-digit, empty, and non-binary input returns false instead of raising" do
+      refute Validation.valid_mod10_check_digit?("12a")
+      refute Validation.valid_mod10_check_digit?("")
+      refute Validation.valid_mod10_check_digit?(nil)
+      refute Validation.valid_mod10_check_digit?(123)
+    end
   end
 
   describe "valid_creditor_reference?/1" do
@@ -42,6 +49,14 @@ defmodule SwissQrBill.ValidationTest do
 
     test "rejects emoji" do
       refute Validation.valid_characters?("Hello 🎉")
+    end
+
+    test "accepts the Euro sign (U+20AC)" do
+      assert Validation.valid_characters?("Total €100")
+    end
+
+    test "accepts Romanian S/T with comma below (U+0218-U+021B)" do
+      assert Validation.valid_characters?("Ștefan Țară ș ț")
     end
   end
 end

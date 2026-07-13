@@ -43,9 +43,15 @@ defmodule SwissQrBill.Reference.QrReferenceGenerator do
 
   @doc """
   Computes the modulo-10 recursive check digit for a numeric string.
+  Raises `ArgumentError` if the string contains anything but digits.
   """
   @spec compute_check_digit(String.t()) :: non_neg_integer()
   def compute_check_digit(string) do
+    unless is_binary(string) and Regex.match?(~r/^[0-9]*$/, string) do
+      raise ArgumentError,
+            "compute_check_digit/1 expects a string of digits, got: #{inspect(string)}"
+    end
+
     carry =
       string
       |> String.graphemes()
@@ -59,17 +65,20 @@ defmodule SwissQrBill.Reference.QrReferenceGenerator do
   end
 
   defp normalize(nil), do: ""
-  defp normalize(str), do: String.replace(str, ~r/\s/, "")
+  defp normalize(n) when is_integer(n), do: Integer.to_string(n)
+  defp normalize(str) when is_binary(str), do: String.replace(str, ~r/\s/, "")
+  defp normalize(other), do: other
 
   defp validate_inputs(customer_id, reference_number) do
     cond do
       reference_number == "" ->
         {:error, "reference_number is required"}
 
-      not Regex.match?(~r/^\d+$/, reference_number) ->
+      not (is_binary(reference_number) and Regex.match?(~r/^\d+$/, reference_number)) ->
         {:error, "reference_number must be numeric"}
 
-      customer_id != "" and not Regex.match?(~r/^\d+$/, customer_id) ->
+      customer_id != "" and
+          not (is_binary(customer_id) and Regex.match?(~r/^\d+$/, customer_id)) ->
         {:error, "customer_id must be numeric"}
 
       String.length(customer_id) + String.length(reference_number) > 26 ->

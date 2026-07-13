@@ -2,11 +2,14 @@ defmodule SwissQrBill.PaymentAmount do
   @moduledoc """
   Payment amount and currency for Swiss QR bills.
   Amount is optional (nil = blank amount box on payment part).
+
+  The amount is stored as a `Decimal` to avoid floating-point rounding errors.
+  `new/2` accepts a `Decimal`, a number (integer or float), or a decimal string.
   """
 
   @type t :: %__MODULE__{
           currency: String.t(),
-          amount: float() | nil
+          amount: Decimal.t() | nil
         }
 
   @enforce_keys [:currency]
@@ -16,13 +19,18 @@ defmodule SwissQrBill.PaymentAmount do
   Creates payment amount information.
   Amount can be nil (for bills without a fixed amount).
   """
-  @spec new(String.t(), float() | nil) :: t()
+  @spec new(String.t(), Decimal.t() | number() | String.t() | nil) :: t()
   def new(currency, amount \\ nil) do
     %__MODULE__{
-      currency: String.upcase(currency),
-      amount: amount
+      currency: normalize_currency(currency),
+      amount: to_decimal(amount)
     }
   end
+
+  # Non-binary currencies are stored as-is so validation reports them
+  # ("currency must be CHF or EUR") instead of new/2 crashing.
+  defp normalize_currency(c) when is_binary(c), do: c |> String.trim() |> String.upcase()
+  defp normalize_currency(c), do: c
 
   @doc """
   Returns the formatted amount for display (with space as thousands separator).
@@ -31,9 +39,9 @@ defmodule SwissQrBill.PaymentAmount do
   @spec formatted_amount(t()) :: String.t()
   def formatted_amount(%__MODULE__{amount: nil}), do: ""
 
-  def formatted_amount(%__MODULE__{amount: amount}) do
+  def formatted_amount(%__MODULE__{amount: %Decimal{} = amount}) do
     amount
-    |> :erlang.float_to_binary(decimals: 2)
+    |> two_decimal_string()
     |> format_with_spaces()
   end
 
@@ -46,8 +54,32 @@ defmodule SwissQrBill.PaymentAmount do
     [nil, currency]
   end
 
-  def qr_code_data(%__MODULE__{amount: amount, currency: currency}) do
-    [:erlang.float_to_binary(amount / 1, decimals: 2), currency]
+  def qr_code_data(%__MODULE__{amount: %Decimal{} = amount, currency: currency}) do
+    [two_decimal_string(amount), currency]
+  end
+
+  # Converts supported inputs to Decimal. Unparseable values are returned as-is
+  # so that validation reports them instead of raising here.
+  defp to_decimal(nil), do: nil
+  defp to_decimal(%Decimal{} = d), do: d
+  defp to_decimal(n) when is_integer(n), do: Decimal.new(n)
+  defp to_decimal(n) when is_float(n), do: Decimal.from_float(n)
+
+  defp to_decimal(s) when is_binary(s) do
+    # Only finite decimals: Decimal.parse also accepts "NaN"/"Infinity"
+    # (coef :NaN/:inf), which would crash Decimal.compare/2 in validation.
+    case Decimal.parse(s) do
+      {%Decimal{coef: coef} = d, ""} when is_integer(coef) -> d
+      _ -> s
+    end
+  end
+
+  defp to_decimal(other), do: other
+
+  defp two_decimal_string(%Decimal{} = amount) do
+    amount
+    |> Decimal.round(2)
+    |> Decimal.to_string(:normal)
   end
 
   defp format_with_spaces(str) do

@@ -18,7 +18,8 @@ defmodule SwissQrBill.Output.TranslationTest do
     :payable_by,
     :payable_by_name,
     :in_favor_of,
-    :do_not_use_for_payment
+    :do_not_use_for_payment,
+    :branding
   ]
 
   describe "get/2" do
@@ -47,8 +48,20 @@ defmodule SwissQrBill.Output.TranslationTest do
       assert Translation.get(:creditor, :en) == "Account / Payable to"
     end
 
-    test "Romansh separate" do
-      assert Translation.get(:separate, :rm) == "Da separar avant il pajament"
+    test "Romansh separate (Annex C Table 23)" do
+      assert Translation.get(:separate, :rm) == "Da distatgar avant che pajar"
+    end
+
+    test "French and Italian payment_part match the official short headings" do
+      assert Translation.get(:payment_part, :fr) == "Section paiement"
+      assert Translation.get(:payment_part, :it) == "Sezione pagamento"
+    end
+
+    test "Romansh headings match Annex C Table 23" do
+      assert Translation.get(:receipt, :rm) == "Quittanza"
+      assert Translation.get(:currency, :rm) == "Valuta"
+      assert Translation.get(:creditor, :rm) == "Conto / Da pajar a"
+      assert Translation.get(:do_not_use_for_payment, :rm) == "BETG DUVRAR PER IL PAJAMENT"
     end
 
     test "raises for unknown key" do
