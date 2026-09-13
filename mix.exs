@@ -40,7 +40,8 @@ defmodule SwissQrBill.MixProject do
       maintainers: ["Rafael Egli"],
       licenses: ["MIT"],
       links: %{
-        "Repository" => "https://git.e9li.com/e9li/swiss_qr_bill"
+        "Repository" => "https://git.e9li.com/e9li/swiss_qr_bill",
+        "qrbill.dev" => "https://qrbill.dev"
       }
     ]
   end

@@ -4,6 +4,8 @@ Swiss QR-bill generation library for Elixir, implementing the [SIX QR-bill stand
 
 Generates the complete payment part (Zahlteil) with receipt as PDF, SVG, or PNG — ready for printing or embedding in invoices.
 
+This is a one-person project. If it helps you, using [qrbill.dev](#support-this-library) is a lovely way to support it.
+
 ## Issues & Feedback
 
 This library is developed at [git.e9li.com](https://git.e9li.com/e9li/swiss_qr_bill) and mirrored to [GitHub](https://github.com/e9li/swiss_qr_bill).
@@ -327,6 +329,10 @@ permitted list).
 - [`pdf`](https://hex.pm/packages/pdf) — PDF output
 - [`decimal`](https://hex.pm/packages/decimal) — exact monetary amounts
 - [`poppler-utils`](https://poppler.freedesktop.org/) — SVG and PNG conversion (system dependency, optional)
+
+## Support this library
+
+I'm Rafael, and I maintain this on my own — it stays free. If it saved you time, using **[qrbill.dev](https://qrbill.dev)** is a lovely way to support it: a Swiss-hosted API I built on this same code. Thank you.
 
 ## License
 
